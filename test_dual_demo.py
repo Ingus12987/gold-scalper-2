@@ -2,7 +2,8 @@ import csv
 import tempfile
 import unittest
 from pathlib import Path
-from dual_demo import PaperBot, ema_series
+from unittest.mock import patch
+from dual_demo import PaperBot, ema_series, main
 
 
 def candles(prices):
@@ -12,6 +13,20 @@ def candles(prices):
 class PaperBotTests(unittest.TestCase):
     def test_ema(self):
         self.assertEqual(ema_series([10, 10, 10], 9), [10., 10., 10.])
+
+    def test_startup_creates_log_folder_and_checks_available_market(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp) / "logs"
+            with patch("sys.argv", ["dual_demo.py", "--once"]), \
+                    patch("dual_demo.Path", return_value=folder), \
+                    patch("dual_demo.ccxt.bingx") as exchange_factory:
+                exchange = exchange_factory.return_value
+                exchange.load_markets.return_value = {"BTC/USDT:USDT": {}}
+                exchange.fetch_ohlcv.return_value = candles([100.] * 80)
+                main()
+                self.assertTrue(folder.is_dir())
+                exchange.fetch_ohlcv.assert_called_once_with(
+                    "BTC/USDT:USDT", "1m", limit=80)
 
     def test_two_independent_bots_and_take_profit(self):
         with tempfile.TemporaryDirectory() as tmp:

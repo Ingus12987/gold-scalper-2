@@ -22,4 +22,4 @@ Stop with Ctrl+C. If gold symbol is unavailable, check the exact BingX instrumen
 python dual_demo.py --gold-symbol 'SYMBOL_FROM_CCXT'
 ```
 
-Both symbols must be available before startup. The program does not place exchange orders. Stops and takes are simulated against candle highs/lows, and gap/slippage risks are not modeled. Use historical backtesting and paper forward-testing before considering live trading.
+Unavailable symbols are reported and skipped; the other bot can still run. Startup stops if neither symbol is available. The program does not place exchange orders. Stops and takes are simulated against candle highs/lows, and gap/slippage risks are not modeled. Use historical backtesting and paper forward-testing before considering live trading.

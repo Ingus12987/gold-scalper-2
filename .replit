@@ -5,3 +5,26 @@ channel = "stable-25_05"
 
 [agent]
 expertMode = true
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Paper trading bot"
+
+[[workflows.workflow]]
+name = "Paper trading bot"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python -u dual_demo.py"
+
+[workflows.workflow.metadata]
+outputType = "console"

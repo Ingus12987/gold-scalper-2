@@ -118,6 +118,8 @@ def main():
             print(f"Market loading failed: {error}; retrying in 30 seconds", flush=True)
             time.sleep(30)
     symbols = {"BTC": args.btc_symbol, "GOLD": args.gold_symbol}
+    folder = Path("logs")
+    folder.mkdir(parents=True, exist_ok=True)
     bots = []
     for name, symbol in symbols.items():
         if symbol not in markets:
