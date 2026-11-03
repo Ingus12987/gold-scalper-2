@@ -19,11 +19,13 @@ FEE_RATE = 0.0005  # illustrative taker fee per side; verify current fees
 COOLDOWN_BARS = 3
 
 
-def ema(values, period):
+def ema_series(values, period):
+    if not values:
+        raise ValueError("No prices")
     alpha = 2 / (period + 1)
-    result = values[0]
+    result = [float(values[0])]
     for value in values[1:]:
-        result = alpha * value + (1 - alpha) * result
+        result.append(alpha * float(value) + (1 - alpha) * result[-1])
     return result
 
 
@@ -34,10 +36,11 @@ class PaperBot:
         self.last_exit_bar = -100
         self.bar = 0
         self.pnl = 0.0
+        self.last_stamp = None
         self.path = folder / (name.lower() + "_trades.csv")
 
     def log(self, side, entry, exit_price, reason, pnl):
-        new = not self.path.exists()
+        new = not self.path.exists() or self.path.stat().st_size == 0
         with self.path.open("a", newline="", encoding="utf-8") as file:
             writer = csv.writer(file)
             if new:
@@ -51,14 +54,13 @@ class PaperBot:
         if len(closed) < 35:
             return
         stamp = closed[-1][0]
-        if getattr(self, "last_stamp", None) == stamp:
+        if self.last_stamp is not None and stamp <= self.last_stamp:
             return
         self.last_stamp = stamp
         self.bar += 1
         closes = [float(c[4]) for c in closed]
         price = closes[-1]
-        fast, slow = ema(closes[-30:], 9), ema(closes[-30:], 21)
-        prev_fast, prev_slow = ema(closes[-31:-1], 9), ema(closes[-31:-1], 21)
+        fast, slow = ema_series(closes, 9), ema_series(closes, 21)
 
         if self.position:
             p = self.position
@@ -84,8 +86,8 @@ class PaperBot:
 
         if self.bar - self.last_exit_bar < COOLDOWN_BARS:
             return
-        side = "LONG" if prev_fast <= prev_slow and fast > slow else (
-            "SHORT" if prev_fast >= prev_slow and fast < slow else None)
+        side = "LONG" if fast[-2] <= slow[-2] and fast[-1] > slow[-1] else (
+            "SHORT" if fast[-2] >= slow[-2] and fast[-1] < slow[-1] else None)
         if not side:
             return
         self.position = {
@@ -101,27 +103,42 @@ def main():
     parser.add_argument("--btc-symbol", default=os.getenv("BTC_SYMBOL", DEFAULTS["BTC"]))
     parser.add_argument("--gold-symbol", default=os.getenv("GOLD_SYMBOL", DEFAULTS["GOLD"]))
     parser.add_argument("--poll", type=int, default=15)
+    parser.add_argument("--once", action="store_true", help="Check market data once, then exit")
     args = parser.parse_args()
     if args.poll < 5:
         parser.error("--poll must be at least 5 seconds")
-    exchange = ccxt.bingx({"enableRateLimit": True, "options": {"defaultType": "swap"}})
-    markets = exchange.load_markets()
+    exchange = ccxt.bingx({"enableRateLimit": True, "timeout": 15000, "options": {"defaultType": "swap"}})
+    while True:
+        try:
+            markets = exchange.load_markets()
+            break
+        except (ccxt.NetworkError, ccxt.ExchangeError) as error:
+            if args.once:
+                raise SystemExit(f"Market loading failed: {error}")
+            print(f"Market loading failed: {error}; retrying in 30 seconds", flush=True)
+            time.sleep(30)
     symbols = {"BTC": args.btc_symbol, "GOLD": args.gold_symbol}
-    missing = [f"{name} ({symbol})" for name, symbol in symbols.items() if symbol not in markets]
-    if missing:
-        raise SystemExit("Unsupported BingX symbol(s): " + ", ".join(missing) +
-                         ". Check BingX/ccxt market names; no trades placed.")
-    folder = Path("logs")
-    folder.mkdir(exist_ok=True)
-    bots = [PaperBot(name, symbol, folder) for name, symbol in symbols.items()]
+    bots = []
+    for name, symbol in symbols.items():
+        if symbol not in markets:
+            print(f"{name}: unavailable symbol {symbol}; other bot can still run", flush=True)
+            continue
+        bots.append(PaperBot(name, symbol, folder))
+        print(f"{name}: READY {symbol}", flush=True)
+    if not bots:
+        raise SystemExit("Neither symbol is available on BingX")
     print("PAPER ONLY: BTC and GOLD. No API keys, no real orders. Ctrl+C stops.", flush=True)
     while True:
         for bot in bots:
             try:
                 candles = exchange.fetch_ohlcv(bot.symbol, "1m", limit=80)
                 bot.update(candles)
+                if args.once:
+                    print(f"{bot.name}: data OK, {len(candles)} candles", flush=True)
             except (ccxt.NetworkError, ccxt.ExchangeError) as error:
                 print(f"{bot.name}: market data error: {error}", flush=True)
+        if args.once:
+            break
         time.sleep(args.poll)
 
 
