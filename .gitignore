@@ -1,0 +1,14 @@
+.env
+.env.*
+*secret*
+*credentials*
+*token*
+*.json
+*.csv
+*.log
+*.lock
+*.bak
+*.backup
+*.before_*
+__pycache__/
+*.pyc
