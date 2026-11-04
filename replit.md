@@ -38,3 +38,9 @@ is regenerated from state after a close or restart. Invalid or mismatched state
 stops the bot rather than silently resetting it. These local files are ignored
 by Git and are not an exchange demo account; fees are approximate and
 slippage/funding are not modeled.
+
+Transient BingX/rate-limit errors, including `100410`, are retried with
+independent per-market exponential backoff (up to five minutes). The first
+successful fetch logs the UTC close time of the newest fresh 1-minute candle.
+Use `python -u dual_demo.py --once` to verify both market feeds without starting
+the continuous polling loop.

@@ -1,14 +1,34 @@
 import csv
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 import ccxt
-from dual_demo import PaperBot, StateError, ema_series, main
+from dual_demo import (
+    ExponentialBackoff,
+    MarketDataError,
+    PaperBot,
+    StateError,
+    ema_series,
+    is_retryable_market_error,
+    latest_closed_candle,
+    main,
+)
 
 
 def candles(prices):
     return [[i * 60000, p, p * 1.001, p * .999, p, 100] for i, p in enumerate(prices)]
+
+
+def fresh_candles(count=80):
+    now_ms = int(time.time() * 1000)
+    current_minute = now_ms // 60000 * 60000
+    first = current_minute - (count - 1) * 60000
+    return [
+        [first + i * 60000, 100., 100.1, 99.9, 100., 100.]
+        for i in range(count)
+    ]
 
 
 class PaperBotTests(unittest.TestCase):
@@ -24,7 +44,7 @@ class PaperBotTests(unittest.TestCase):
                 exchange = exchange_factory.return_value
                 exchange.load_markets.return_value = {
                     "BTC/USDT:USDT": {}, "XAUT/USDT:USDT": {}}
-                exchange.fetch_ohlcv.return_value = candles([100.] * 80)
+                exchange.fetch_ohlcv.return_value = fresh_candles()
                 main()
                 self.assertTrue(folder.is_dir())
                 self.assertEqual(exchange.fetch_ohlcv.call_args_list, [
@@ -172,6 +192,36 @@ class PaperBotTests(unittest.TestCase):
                 with self.assertRaisesRegex(SystemExit, 'Market loading failed: temporary BingX error'):
                     main()
 
+    def test_market_loading_100410_retries_with_backoff_then_starts_both_bots(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp) / 'logs'
+            clock = [0.]
+            waits = []
+            markets = {'BTC/USDT:USDT': {}, 'XAUT/USDT:USDT': {}}
+
+            def sleep(seconds):
+                waits.append(seconds)
+                clock[0] += seconds
+                if len(waits) >= 2:
+                    raise KeyboardInterrupt
+
+            with patch('sys.argv', ['dual_demo.py', '--poll', '5']), \
+                    patch('dual_demo.Path', return_value=folder), \
+                    patch('dual_demo.ccxt.bingx') as exchange_factory, \
+                    patch('dual_demo.time.monotonic', side_effect=lambda: clock[0]), \
+                    patch('dual_demo.time.sleep', side_effect=sleep):
+                exchange = exchange_factory.return_value
+                exchange.load_markets.side_effect = [
+                    ccxt.OperationFailed('BingX code 100410: try again later'),
+                    markets,
+                ]
+                exchange.fetch_ohlcv.return_value = fresh_candles()
+                with self.assertRaises(KeyboardInterrupt):
+                    main()
+                self.assertEqual(exchange.load_markets.call_count, 2)
+                self.assertEqual(exchange.fetch_ohlcv.call_count, 2)
+            self.assertEqual(waits, [5., 5.])
+
     def test_once_attempts_both_symbols_and_reports_individual_candle_failure(self):
         with tempfile.TemporaryDirectory() as tmp:
             folder = Path(tmp) / 'logs'
@@ -185,7 +235,7 @@ class PaperBotTests(unittest.TestCase):
                 def fetch(symbol, timeframe, limit):
                     if symbol == 'BTC/USDT:USDT':
                         raise ccxt.OperationFailed('BingX temporarily unavailable')
-                    return candles([100.] * 80)
+                    return fresh_candles()
 
                 exchange.fetch_ohlcv.side_effect = fetch
                 with self.assertRaisesRegex(SystemExit, 'Market data check failed: BTC:'):
@@ -193,6 +243,73 @@ class PaperBotTests(unittest.TestCase):
                 self.assertEqual(exchange.fetch_ohlcv.call_count, 2)
                 self.assertEqual(exchange.fetch_ohlcv.call_args_list[0].args[0], 'BTC/USDT:USDT')
                 self.assertEqual(exchange.fetch_ohlcv.call_args_list[1].args[0], 'XAUT/USDT:USDT')
+
+    def test_backoff_doubles_caps_and_resets(self):
+        backoff = ExponentialBackoff(initial_delay=5, max_delay=20)
+        self.assertEqual(backoff.fail(100), 5)
+        self.assertTrue(backoff.is_waiting(104.9))
+        self.assertFalse(backoff.is_waiting(105))
+        self.assertEqual(backoff.fail(105), 10)
+        self.assertEqual(backoff.fail(115), 20)
+        self.assertEqual(backoff.fail(135), 20)
+        backoff.reset()
+        self.assertFalse(backoff.is_waiting(135))
+        self.assertEqual(backoff.fail(135), 5)
+
+    def test_bingx_100410_and_rate_limit_errors_are_retryable(self):
+        self.assertTrue(is_retryable_market_error(
+            ccxt.OperationFailed('bingx {"code":100410,"msg":"try again later"}')))
+        self.assertTrue(is_retryable_market_error(ccxt.RateLimitExceeded('HTTP 429')))
+        self.assertFalse(is_retryable_market_error(ccxt.BadSymbol('invalid symbol')))
+
+    def test_latest_closed_candle_must_be_fresh_and_one_minute_aligned(self):
+        rows = [
+            [420_000, 1., 1., 1., 1., 1.],
+            [480_000, 1., 1., 1., 1., 1.],
+            [540_000, 1., 1., 1., 1., 1.],
+            [600_000, 1., 1., 1., 1., 1.],
+        ]
+        self.assertEqual(latest_closed_candle(rows, now_ms=600_000), rows[2])
+        with self.assertRaisesRegex(MarketDataError, 'stale'):
+            latest_closed_candle(rows[:2], now_ms=1_000_000)
+
+    def test_xaut_backoff_does_not_pause_btc_and_recovers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp) / 'logs'
+            clock = [0.]
+            btc_attempts = []
+            xaut_attempts = []
+
+            def fetch(symbol, timeframe, limit):
+                if symbol == 'BTC/USDT:USDT':
+                    btc_attempts.append(clock[0])
+                    return fresh_candles()
+                xaut_attempts.append(clock[0])
+                if len(xaut_attempts) <= 2:
+                    raise ccxt.OperationFailed(
+                        'bingx {"code":100410,"msg":"please try again later"}')
+                return fresh_candles()
+
+            def sleep(seconds):
+                clock[0] += seconds
+                if clock[0] >= 30:
+                    raise KeyboardInterrupt
+
+            with patch('sys.argv', ['dual_demo.py', '--poll', '5']), \
+                    patch('dual_demo.Path', return_value=folder), \
+                    patch('dual_demo.ccxt.bingx') as exchange_factory, \
+                    patch('dual_demo.time.monotonic', side_effect=lambda: clock[0]), \
+                    patch('dual_demo.time.sleep', side_effect=sleep):
+                exchange = exchange_factory.return_value
+                exchange.load_markets.return_value = {
+                    'BTC/USDT:USDT': {}, 'XAUT/USDT:USDT': {}}
+                exchange.fetch_ohlcv.side_effect = fetch
+                with self.assertRaises(KeyboardInterrupt):
+                    main()
+
+            self.assertGreaterEqual(len(btc_attempts), 5)
+            self.assertGreaterEqual(len(xaut_attempts), 4)
+            self.assertEqual(xaut_attempts[:3], [0., 5., 15.])
 
 
 if __name__ == '__main__':

@@ -36,3 +36,7 @@ with an error rather than silently resetting a position or P&L. On restart,
 unprocessed candles still returned by BingX are replayed for saved open positions.
 If an open position is older than the candle history BingX returns, that bot
 stops rather than guessing whether a simulated stop or target was reached.
+
+Transient BingX errors (including code `100410` and rate limits) use independent
+per-market exponential backoff, capped at five minutes. `--once` validates that
+each market has a fresh, completed 1-minute candle and prints its UTC close time.

@@ -20,10 +20,84 @@ STOP_PCT = 0.003
 TAKE_PCT = 0.006
 FEE_RATE = 0.0005  # illustrative taker fee per side; verify current fees
 COOLDOWN_BARS = 3
+MARKET_DATA_MAX_AGE_MS = 180_000
+MAX_BACKOFF_SECONDS = 300.0
 
 
 class StateError(RuntimeError):
     """Raised when saved paper-trading state cannot be used safely."""
+
+
+class MarketDataError(ccxt.NetworkError):
+    """Raised when BingX returns missing, malformed, or stale candles."""
+
+
+class ExponentialBackoff:
+    def __init__(self, initial_delay, max_delay=MAX_BACKOFF_SECONDS):
+        self.max_delay = float(max_delay)
+        self.initial_delay = min(float(initial_delay), self.max_delay)
+        self.current_delay = self.initial_delay
+        self.retry_at = 0.0
+
+    def is_waiting(self, now):
+        return now < self.retry_at
+
+    def fail(self, now):
+        delay = self.current_delay
+        self.retry_at = now + delay
+        self.current_delay = min(self.current_delay * 2, self.max_delay)
+        return delay
+
+    def reset(self):
+        self.current_delay = self.initial_delay
+        self.retry_at = 0.0
+
+
+def is_retryable_market_error(error):
+    if isinstance(error, (
+            ccxt.NetworkError, ccxt.RateLimitExceeded, ccxt.DDoSProtection)):
+        return True
+    message = str(error).lower()
+    return any(marker in message for marker in (
+        "100410", "429", "rate limit", "too many request",
+        "try again later", "temporarily unavailable",
+    ))
+
+
+def latest_closed_candle(candles, now_ms=None):
+    """Return the newest fresh, completed 1-minute candle or raise for retry."""
+    if not isinstance(candles, (list, tuple)) or len(candles) < 2:
+        raise MarketDataError("BingX returned fewer than two candles")
+
+    timestamps = []
+    for index, candle in enumerate(candles):
+        if not isinstance(candle, (list, tuple)) or len(candle) < 5:
+            raise MarketDataError(f"BingX returned a malformed candle at index {index}")
+        try:
+            stamp = int(candle[0])
+        except (TypeError, ValueError, OverflowError) as error:
+            raise MarketDataError(f"BingX returned an invalid candle timestamp at index {index}") from error
+        if stamp % 60_000:
+            raise MarketDataError(f"BingX returned a non-minute candle timestamp: {stamp}")
+        timestamps.append(stamp)
+    if any(current <= previous for previous, current in zip(timestamps, timestamps[1:])):
+        raise MarketDataError("BingX candles are not in strictly increasing time order")
+
+    now_ms = int(time.time() * 1000) if now_ms is None else int(now_ms)
+    completed = [
+        candle for candle, stamp in zip(candles, timestamps)
+        if stamp + 60_000 <= now_ms
+    ]
+    if not completed:
+        raise MarketDataError("BingX returned no completed 1-minute candle")
+
+    newest = completed[-1]
+    age_ms = now_ms - (int(newest[0]) + 60_000)
+    if age_ms > MARKET_DATA_MAX_AGE_MS:
+        raise MarketDataError(
+            f"newest completed 1-minute candle is stale by {age_ms // 1000}s"
+        )
+    return newest
 
 
 def ema_series(values, period):
@@ -332,15 +406,22 @@ def main():
     if args.poll < 5:
         parser.error("--poll must be at least 5 seconds")
     exchange = ccxt.bingx({"enableRateLimit": True, "timeout": 15000, "options": {"defaultType": "swap"}})
+    initial_backoff = min(float(args.poll), MAX_BACKOFF_SECONDS)
+    market_list_backoff = ExponentialBackoff(initial_backoff)
     while True:
         try:
             markets = exchange.load_markets()
             break
         except ccxt.BaseError as error:
-            if args.once:
+            if args.once or not is_retryable_market_error(error):
                 raise SystemExit(f"Market loading failed: {error}")
-            print(f"Market loading failed: {error}; retrying in 30 seconds", flush=True)
-            time.sleep(30)
+            delay = market_list_backoff.fail(time.monotonic())
+            print(
+                f"Market loading temporarily failed: {error}; "
+                f"retrying in {delay:g}s (exponential backoff)",
+                flush=True,
+            )
+            time.sleep(delay)
     symbols = {"BTC": args.btc_symbol, "GOLD": args.gold_symbol}
     folder = Path("logs")
     folder.mkdir(parents=True, exist_ok=True)
@@ -355,19 +436,51 @@ def main():
         raise SystemExit("Neither symbol is available on BingX")
     print("PAPER ONLY: BTC and GOLD. No API keys, no real orders. Ctrl+C stops.", flush=True)
     disabled_bots = set()
+    verified_bots = set()
+    backoffs = {
+        bot.name: ExponentialBackoff(initial_backoff)
+        for bot in bots
+    }
     while True:
         failures = []
         for bot in bots:
             if bot.name in disabled_bots:
                 continue
+            backoff = backoffs[bot.name]
+            if backoff.is_waiting(time.monotonic()):
+                continue
             try:
                 candles = exchange.fetch_ohlcv(bot.symbol, "1m", limit=80)
+                latest_closed = latest_closed_candle(candles)
+                backoff.reset()
+                candle_end = datetime.fromtimestamp(
+                    (int(latest_closed[0]) + 60_000) / 1000,
+                    tz=timezone.utc,
+                ).isoformat()
+                if bot.name not in verified_bots:
+                    print(f"{bot.name}: fresh 1m candles through {candle_end}", flush=True)
+                    verified_bots.add(bot.name)
                 bot.update(candles)
                 if args.once:
-                    print(f"{bot.name}: data OK, {len(candles)} candles", flush=True)
+                    print(
+                        f"{bot.name}: data OK, {len(candles)} candles; "
+                        f"latest closed candle {candle_end}",
+                        flush=True,
+                    )
             except ccxt.BaseError as error:
-                print(f"{bot.name}: market data error: {error}", flush=True)
                 failures.append(f"{bot.name}: {error}")
+                if args.once:
+                    print(f"{bot.name}: market data error: {error}", flush=True)
+                elif is_retryable_market_error(error):
+                    delay = backoff.fail(time.monotonic())
+                    print(
+                        f"{bot.name}: transient/rate-limit market data error: {error}; "
+                        f"retrying in {delay:g}s (exponential backoff)",
+                        flush=True,
+                    )
+                else:
+                    print(f"{bot.name}: non-retryable market data error: {error}; disabling this bot", flush=True)
+                    disabled_bots.add(bot.name)
             except StateError as error:
                 message = f"{bot.name}: paper state recovery stopped: {error}"
                 print(message, flush=True)
