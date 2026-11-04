@@ -26,8 +26,15 @@ slash-separated unified symbols and the public swap klines endpoint
 skipped; if neither is available, the bot exits. To use a different listed
 market, pass `--gold-symbol 'EXACT_CCXT_SYMBOL'` or set `GOLD_SYMBOL`.
 
-Completed simulated trades append to `logs/btc_trades.csv` and
+Completed simulated trades are recorded in `logs/btc_trades.csv` and
 `logs/gold_trades.csv`; files are created only when trades close.
-Open positions, cooldowns, and cumulative P&L are in memory and reset on restart.
-CSV files are ignored by Git. These are local paper simulations, not an exchange
-demo account; fees are approximate and slippage/funding are not modeled.
+Each bot also saves its open position, closed trades, cumulative P&L, cooldown,
+bar count, and last processed candle atomically in `logs/*_state.json`. On
+restart, missed candles available from the market response are replayed for an
+open position. If an open position is older than the returned candle history,
+that bot stops rather than guessing whether its stop or take was reached.
+Existing CSV history is imported if no state file exists; the CSV
+is regenerated from state after a close or restart. Invalid or mismatched state
+stops the bot rather than silently resetting it. These local files are ignored
+by Git and are not an exchange demo account; fees are approximate and
+slippage/funding are not modeled.
