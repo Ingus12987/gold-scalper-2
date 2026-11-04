@@ -10,7 +10,7 @@ from pathlib import Path
 
 import ccxt
 
-DEFAULTS = {"BTC": "BTC/USDT:USDT", "GOLD": "XAU/USDT:USDT"}
+DEFAULTS = {"BTC": "BTC/USDT:USDT", "GOLD": "XAUT/USDT:USDT"}
 MARGIN = 20.0
 LEVERAGE = 20.0
 STOP_PCT = 0.003

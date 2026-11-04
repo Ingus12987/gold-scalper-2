@@ -21,17 +21,20 @@ class PaperBotTests(unittest.TestCase):
                     patch("dual_demo.Path", return_value=folder), \
                     patch("dual_demo.ccxt.bingx") as exchange_factory:
                 exchange = exchange_factory.return_value
-                exchange.load_markets.return_value = {"BTC/USDT:USDT": {}}
+                exchange.load_markets.return_value = {
+                    "BTC/USDT:USDT": {}, "XAUT/USDT:USDT": {}}
                 exchange.fetch_ohlcv.return_value = candles([100.] * 80)
                 main()
                 self.assertTrue(folder.is_dir())
-                exchange.fetch_ohlcv.assert_called_once_with(
-                    "BTC/USDT:USDT", "1m", limit=80)
+                self.assertEqual(exchange.fetch_ohlcv.call_args_list, [
+                    unittest.mock.call("BTC/USDT:USDT", "1m", limit=80),
+                    unittest.mock.call("XAUT/USDT:USDT", "1m", limit=80),
+                ])
 
     def test_two_independent_bots_and_take_profit(self):
         with tempfile.TemporaryDirectory() as tmp:
             btc = PaperBot('BTC', 'BTC/USDT:USDT', Path(tmp))
-            gold = PaperBot('GOLD', 'XAU/USDT:USDT', Path(tmp))
+            gold = PaperBot('GOLD', 'XAUT/USDT:USDT', Path(tmp))
             series = [100.] * 40 + [110., 110.]
             btc.update(candles(series))
             gold.update(candles(series))
@@ -47,7 +50,7 @@ class PaperBotTests(unittest.TestCase):
 
     def test_short_stop_wins_when_both_levels_touched(self):
         with tempfile.TemporaryDirectory() as tmp:
-            bot = PaperBot('GOLD', 'XAU/USDT:USDT', Path(tmp))
+            bot = PaperBot('GOLD', 'XAUT/USDT:USDT', Path(tmp))
             bot.position = {'side': 'SHORT', 'entry': 100., 'stop': 100.3, 'take': 99.4}
             data = candles([100.] * 40)
             data[-2][2], data[-2][3] = 101., 99.

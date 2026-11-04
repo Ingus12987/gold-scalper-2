@@ -14,17 +14,17 @@ structure and paper-only behavior; no exchange orders or API keys are needed.
 ## Checks
 
 - Unit tests: `python -m unittest -v`
-- One live-data pass: `python -u dual_demo.py --once`
+- One live-data pass for both markets: `python -u dual_demo.py --once`
 - Polling defaults to 15 seconds; `--poll` must be at least 5.
 
 ## Markets and logs
 
-The default symbols are `BTC/USDT:USDT` and `XAU/USDT:USDT`.
-At setup, BingX provided BTC but did not list the default gold symbol.
-Unavailable symbols are reported and skipped; if neither exists, the bot exits.
-Do not silently substitute a tokenized-gold asset or a different instrument.
-To use another confirmed symbol, pass `--gold-symbol 'EXACT_CCXT_SYMBOL'`
-or use the existing `GOLD_SYMBOL` environment-variable support.
+The defaults are BTC `BTC/USDT:USDT` and tokenized gold XAUT `XAUT/USDT:USDT`.
+BingX's REST API calls these `BTC-USDT` and `XAUT-USDT`; the bot uses CCXT's
+slash-separated unified symbols and the public swap klines endpoint
+`/openApi/swap/v3/quote/klines`. If a symbol is unavailable, it is reported and
+skipped; if neither is available, the bot exits. To use a different listed
+market, pass `--gold-symbol 'EXACT_CCXT_SYMBOL'` or set `GOLD_SYMBOL`.
 
 Completed simulated trades append to `logs/btc_trades.csv` and
 `logs/gold_trades.csv`; files are created only when trades close.

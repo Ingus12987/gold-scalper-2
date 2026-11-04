@@ -2,7 +2,7 @@
 
 Two independent 1-minute trend scalp **paper** bots, using public BingX market data. No API key required. **No real orders** are sent.
 
-- BTC/USDT and Gold (default symbol `XAU/USDT:USDT`, only if listed by BingX/ccxt)
+- BTC/USDT (`BTC/USDT:USDT`) and tokenized gold (XAUT; BingX/CCXT symbol `XAUT/USDT:USDT`)
 - Each: 20 USDT paper margin, 20x simulated leverage (400 USDT notional)
 - EMA(9/21) crossover, 0.3% price stop, 0.6% price take profit
 - One simulated position per instrument; independent cooldowns
@@ -16,7 +16,11 @@ python -m pip install -r requirements.txt
 python dual_demo.py
 ```
 
-Stop with Ctrl+C. If gold symbol is unavailable, check the exact BingX instrument name and run:
+Stop with Ctrl+C. Replit/CCXT uses slash-separated symbols; BingX's public REST
+API uses `BASE-QUOTE` (for example, CCXT `XAUT/USDT:USDT` maps to REST
+`XAUT-USDT`). The paper bot reads public 1-minute swap candles from
+`GET https://open-api.bingx.com/openApi/swap/v3/quote/klines`; no API key is
+needed. To choose another listed CCXT market:
 
 ```sh
 python dual_demo.py --gold-symbol 'SYMBOL_FROM_CCXT'
