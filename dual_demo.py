@@ -7,9 +7,12 @@ import json
 import math
 import os
 import tempfile
+import threading
 import time
 from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import ccxt
 
@@ -22,6 +25,8 @@ FEE_RATE = 0.0005  # illustrative taker fee per side; verify current fees
 COOLDOWN_BARS = 3
 MARKET_DATA_MAX_AGE_MS = 180_000
 MAX_BACKOFF_SECONDS = 300.0
+DEFAULT_POLL_SECONDS = 60
+DASHBOARD_PORT = int(os.getenv("PORT", "5000"))
 
 
 class StateError(RuntimeError):
@@ -79,6 +84,13 @@ def latest_closed_candle(candles, now_ms=None):
             raise MarketDataError(f"BingX returned an invalid candle timestamp at index {index}") from error
         if stamp % 60_000:
             raise MarketDataError(f"BingX returned a non-minute candle timestamp: {stamp}")
+        try:
+            opened, high, low, close = (float(candle[index]) for index in (1, 2, 3, 4))
+        except (TypeError, ValueError, OverflowError) as error:
+            raise MarketDataError(f"BingX returned invalid OHLC data at index {index}") from error
+        if (not all(math.isfinite(value) and value > 0 for value in (opened, high, low, close))
+                or high < max(opened, close) or low > min(opened, close) or high < low):
+            raise MarketDataError(f"BingX returned inconsistent OHLC data at index {index}")
         timestamps.append(stamp)
     if any(current <= previous for previous, current in zip(timestamps, timestamps[1:])):
         raise MarketDataError("BingX candles are not in strictly increasing time order")
@@ -120,7 +132,10 @@ class PaperBot:
         self.bar = 0
         self.pnl = 0.0
         self.last_stamp = None
+        self.last_price = None
+        self.last_mark_stamp = None
         self.closed_trades = []
+        self.state_lock = threading.RLock()
         self.path = self.folder / (name.lower() + "_trades.csv")
         self.state_path = self.folder / (name.lower() + "_state.json")
         self._restore_state()
@@ -180,6 +195,19 @@ class PaperBot:
         if last_stamp is not None and (
                 isinstance(last_stamp, bool) or not isinstance(last_stamp, int) or last_stamp < 0):
             raise StateError("last_stamp must be null or a non-negative integer")
+        last_price = state.get("last_price")
+        last_mark_stamp = state.get("last_mark_stamp")
+        if last_price is None and last_mark_stamp is None:
+            pass
+        elif last_price is None or last_mark_stamp is None:
+            raise StateError("last_price and last_mark_stamp must both be present or null")
+        else:
+            last_price = self._number(last_price, "last_price")
+            if last_price <= 0:
+                raise StateError("last_price must be positive")
+            if (isinstance(last_mark_stamp, bool) or not isinstance(last_mark_stamp, int)
+                    or last_mark_stamp < 0):
+                raise StateError("last_mark_stamp must be a non-negative integer")
 
         raw_position = state.get("position")
         position = None
@@ -212,6 +240,8 @@ class PaperBot:
         self.bar = bar
         self.pnl = pnl
         self.last_stamp = last_stamp
+        self.last_price = last_price
+        self.last_mark_stamp = last_mark_stamp
         self.closed_trades = trades
 
     def _atomic_write(self, path, write_contents, newline=None):
@@ -246,6 +276,8 @@ class PaperBot:
             "bar": self.bar,
             "pnl": self.pnl,
             "last_stamp": self.last_stamp,
+            "last_price": self.last_price,
+            "last_mark_stamp": self.last_mark_stamp,
             "closed_trades": self.closed_trades,
         }
         self._atomic_write(
@@ -312,15 +344,27 @@ class PaperBot:
         if write_trades:
             self._write_trade_csv()
 
-    def update(self, candles):
-        # Exclude still-forming candle; signals use completed candles only.
-        closed = candles[:-1]
+    def update(self, candles, newest_closed=None):
+        with self.state_lock:
+            return self._update(candles, newest_closed)
+
+    def _update(self, candles, newest_closed=None):
+        # Main passes the newest completed candle explicitly, so also support
+        # exchange responses that omit the still-forming candle.
+        if newest_closed is None:
+            closed = candles[:-1]
+        else:
+            closed = [candle for candle in candles if candle[0] <= newest_closed[0]]
         if not closed:
             return
+        if newest_closed is None:
+            newest_closed = closed[-1]
 
         if self.last_stamp is None:
             # Keep first-run behavior: start from the latest closed candle only.
             if len(closed) < 35:
+                self._set_mark(newest_closed)
+                self._persist()
                 return
             indexes = [len(closed) - 1]
         else:
@@ -334,15 +378,18 @@ class PaperBot:
             # still hit its simulated stop or take profit during the outage.
             indexes = [i for i, candle in enumerate(closed) if candle[0] > self.last_stamp]
         if not indexes:
+            if self._set_mark(newest_closed):
+                self._persist()
             return
         for index in indexes:
+            candle = closed[index]
+            self._set_mark(candle)
             if self.position is None and index < 34:
-                self.last_stamp = closed[index][0]
+                self.last_stamp = candle[0]
                 self.bar += 1
                 self._persist()
                 continue
 
-            candle = closed[index]
             self.last_stamp = candle[0]
             self.bar += 1
             closes = [float(c[4]) for c in closed[:index + 1]]
@@ -395,16 +442,202 @@ class PaperBot:
                     print(f"{self.name}: PAPER OPEN {side} at {price:.5f}", flush=True)
             self._persist()
 
+    def _set_mark(self, candle):
+        price = float(candle[4])
+        if not math.isfinite(price) or price <= 0:
+            raise MarketDataError("candle close must be a finite positive price")
+        changed = self.last_price != price or self.last_mark_stamp != int(candle[0])
+        self.last_price = price
+        self.last_mark_stamp = int(candle[0])
+        return changed
+
+    def dashboard_snapshot(self, now_ms=None):
+        with self.state_lock:
+            now_ms = int(time.time() * 1000) if now_ms is None else int(now_ms)
+            position = None
+            unrealized = 0.0
+            mark_fresh = (
+                self.last_price is not None
+                and self.last_mark_stamp is not None
+                and 0 <= now_ms - (self.last_mark_stamp + 60_000) <= MARKET_DATA_MAX_AGE_MS
+            )
+            if self.position:
+                pos = self.position
+                mark = self.last_price if mark_fresh else None
+                if mark is None:
+                    unrealized = None
+                else:
+                    direction = 1 if pos["side"] == "LONG" else -1
+                    notional = MARGIN * LEVERAGE
+                    gross = direction * (mark - pos["entry"]) / pos["entry"] * notional
+                    estimated_fees = (
+                        (pos["entry"] + mark) / pos["entry"] * notional * FEE_RATE
+                    )
+                    unrealized = gross - estimated_fees
+                position = {
+                    "side": pos["side"],
+                    "entry_price": pos["entry"],
+                    "stop_price": pos["stop"],
+                    "take_price": pos["take"],
+                    "mark_price": self.last_price if mark_fresh else None,
+                    "unrealized_pnl_usdt": unrealized,
+                }
+
+            cumulative = self.pnl + unrealized if unrealized is not None else None
+            return {
+                "name": self.name,
+                "symbol": self.symbol,
+                "open_position": position,
+                "closed_trades": [
+                    {
+                        "closed_at": trade["utc"],
+                        "side": trade["side"],
+                        "entry_price": trade["entry"],
+                        "exit_price": trade["exit"],
+                        "reason": trade["reason"],
+                        "net_pnl_usdt": trade["net_pnl_usdt"],
+                    }
+                    for trade in reversed(self.closed_trades[-50:])
+                ],
+                "realized_pnl_usdt": self.pnl,
+                "unrealized_pnl_usdt": unrealized,
+                "cumulative_pnl_usdt": cumulative,
+                "mark_price": self.last_price if mark_fresh else None,
+                "mark_at": self._iso_candle_end(self.last_mark_stamp),
+                "last_processed_candle_at": self._iso_candle_end(self.last_stamp),
+            }
+
+    @staticmethod
+    def _iso_candle_end(stamp):
+        if stamp is None:
+            return None
+        return datetime.fromtimestamp((stamp + 60_000) / 1000, tz=timezone.utc).isoformat()
+
+
+class DashboardState:
+    """Thread-safe, read-only view over persisted paper bot state and feed status."""
+
+    def __init__(self, bots):
+        self.bots = {bot.name: bot for bot in bots}
+        self.lock = threading.RLock()
+        self.statuses = {
+            bot.name: {
+                "status": "starting",
+                "status_message": None,
+                "last_market_data_at": None,
+                "latest_candle_at": None,
+                "retry_at": None,
+            }
+            for bot in bots
+        }
+
+    def update_status(
+        self, name, status, message=None, last_market_data_at=None,
+        latest_candle_at=None, retry_at=None,
+    ):
+        with self.lock:
+            previous = self.statuses.get(name, {})
+            self.statuses[name] = {
+                "status": status,
+                "status_message": message,
+                "last_market_data_at": last_market_data_at or previous.get("last_market_data_at"),
+                "latest_candle_at": latest_candle_at or previous.get("latest_candle_at"),
+                "retry_at": retry_at,
+            }
+
+    def snapshot(self, now_ms=None):
+        now_ms = int(time.time() * 1000) if now_ms is None else int(now_ms)
+        with self.lock:
+            statuses = {name: dict(value) for name, value in self.statuses.items()}
+
+        bots = []
+        for name, bot in self.bots.items():
+            item = bot.dashboard_snapshot(now_ms)
+            status = statuses[name]
+            resolved_status = status["status"]
+            mark_at = item["mark_at"]
+            if mark_at is not None:
+                mark_ms = int(datetime.fromisoformat(mark_at).timestamp() * 1000)
+                if now_ms - mark_ms > MARKET_DATA_MAX_AGE_MS:
+                    resolved_status = "stale"
+                    if not status["status_message"]:
+                        status["status_message"] = "Last market candle is outside the freshness window."
+            elif resolved_status == "fresh":
+                resolved_status = "stale"
+                status["status_message"] = "No persisted candle price is available."
+
+            bots.append({
+                **item,
+                "status": resolved_status,
+                "status_message": status["status_message"],
+                "last_market_data_at": status["last_market_data_at"],
+                "latest_candle_at": status["latest_candle_at"] or mark_at,
+                "retry_at": status["retry_at"],
+            })
+        return {
+            "mode": "paper-only",
+            "updated_at": datetime.fromtimestamp(now_ms / 1000, tz=timezone.utc).isoformat(),
+            "bots": bots,
+        }
+
+
+def start_dashboard(dashboard_state, port=DASHBOARD_PORT):
+    html_path = Path(__file__).with_name("dashboard-ui") / "index.html"
+    if not html_path.is_file():
+        raise RuntimeError(f"Dashboard UI file is missing: {html_path}")
+
+    class Handler(BaseHTTPRequestHandler):
+        def _respond(self, status, content_type, body):
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            route = urlsplit(self.path).path
+            if route in ("/", "/dashboard"):
+                self._respond(200, "text/html; charset=utf-8", html_path.read_bytes())
+            elif route == "/api/state":
+                body = json.dumps(
+                    dashboard_state.snapshot(), allow_nan=False, separators=(",", ":")
+                ).encode("utf-8")
+                self._respond(200, "application/json; charset=utf-8", body)
+            else:
+                self._respond(404, "text/plain; charset=utf-8", b"Not found")
+
+        def log_message(self, format_string, *args):
+            # Dashboard refreshes are local reads, not market-data activity.
+            return
+
+    server = ThreadingHTTPServer(("0.0.0.0", int(port)), Handler)
+    server.daemon_threads = True
+    thread = threading.Thread(target=server.serve_forever, name="paper-dashboard", daemon=True)
+    thread.start()
+    print(f"Read-only paper dashboard listening on port {port}", flush=True)
+    return server
+
+
+def iso_timestamp(timestamp):
+    if timestamp is None:
+        return None
+    return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
+
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--btc-symbol", default=os.getenv("BTC_SYMBOL", DEFAULTS["BTC"]))
     parser.add_argument("--gold-symbol", default=os.getenv("GOLD_SYMBOL", DEFAULTS["GOLD"]))
-    parser.add_argument("--poll", type=int, default=15)
+    parser.add_argument(
+        "--poll", type=int, default=DEFAULT_POLL_SECONDS,
+        help="minimum normal polling interval in seconds (at least one minute)",
+    )
     parser.add_argument("--once", action="store_true", help="Check market data once, then exit")
     args = parser.parse_args()
-    if args.poll < 5:
-        parser.error("--poll must be at least 5 seconds")
+    if args.poll < 60:
+        parser.error("--poll must be at least 60 seconds to avoid polling faster than candles form")
     exchange = ccxt.bingx({"enableRateLimit": True, "timeout": 15000, "options": {"defaultType": "swap"}})
     initial_backoff = min(float(args.poll), MAX_BACKOFF_SECONDS)
     market_list_backoff = ExponentialBackoff(initial_backoff)
@@ -426,71 +659,117 @@ def main():
     folder = Path("logs")
     folder.mkdir(parents=True, exist_ok=True)
     bots = []
+    active_bots = []
     for name, symbol in symbols.items():
+        bot = PaperBot(name, symbol, folder)
+        bots.append(bot)
         if symbol not in markets:
             print(f"{name}: unavailable symbol {symbol}; other bot can still run", flush=True)
             continue
-        bots.append(PaperBot(name, symbol, folder))
+        active_bots.append(bot)
         print(f"{name}: READY {symbol}", flush=True)
-    if not bots:
+    if not active_bots:
         raise SystemExit("Neither symbol is available on BingX")
+
+    dashboard_state = DashboardState(bots)
+    for bot in bots:
+        if bot not in active_bots:
+            dashboard_state.update_status(
+                bot.name, "disabled", f"Unavailable BingX symbol: {bot.symbol}"
+            )
     print("PAPER ONLY: BTC and GOLD. No API keys, no real orders. Ctrl+C stops.", flush=True)
     disabled_bots = set()
     verified_bots = set()
     backoffs = {
         bot.name: ExponentialBackoff(initial_backoff)
-        for bot in bots
+        for bot in active_bots
     }
-    while True:
-        failures = []
-        for bot in bots:
-            if bot.name in disabled_bots:
-                continue
-            backoff = backoffs[bot.name]
-            if backoff.is_waiting(time.monotonic()):
-                continue
-            try:
-                candles = exchange.fetch_ohlcv(bot.symbol, "1m", limit=80)
-                latest_closed = latest_closed_candle(candles)
-                backoff.reset()
-                candle_end = datetime.fromtimestamp(
-                    (int(latest_closed[0]) + 60_000) / 1000,
-                    tz=timezone.utc,
-                ).isoformat()
-                if bot.name not in verified_bots:
-                    print(f"{bot.name}: fresh 1m candles through {candle_end}", flush=True)
-                    verified_bots.add(bot.name)
-                bot.update(candles)
-                if args.once:
-                    print(
-                        f"{bot.name}: data OK, {len(candles)} candles; "
-                        f"latest closed candle {candle_end}",
-                        flush=True,
+    next_poll_at = {bot.name: 0.0 for bot in active_bots}
+    dashboard_server = None
+    if not args.once:
+        dashboard_server = start_dashboard(dashboard_state)
+    try:
+        while True:
+            failures = []
+            for bot in active_bots:
+                if bot.name in disabled_bots:
+                    continue
+                now_mono = time.monotonic()
+                if now_mono < next_poll_at[bot.name]:
+                    continue
+                backoff = backoffs[bot.name]
+                if backoff.is_waiting(now_mono):
+                    next_poll_at[bot.name] = backoff.retry_at
+                    continue
+                try:
+                    candles = exchange.fetch_ohlcv(bot.symbol, "1m", limit=80)
+                    latest_closed = latest_closed_candle(candles)
+                    bot.update(candles, newest_closed=latest_closed)
+                    backoff.reset()
+                    now_wall = time.time()
+                    candle_end = datetime.fromtimestamp(
+                        (int(latest_closed[0]) + 60_000) / 1000,
+                        tz=timezone.utc,
+                    ).isoformat()
+                    dashboard_state.update_status(
+                        bot.name,
+                        "fresh",
+                        last_market_data_at=iso_timestamp(now_wall),
+                        latest_candle_at=candle_end,
                     )
-            except ccxt.BaseError as error:
-                failures.append(f"{bot.name}: {error}")
-                if args.once:
-                    print(f"{bot.name}: market data error: {error}", flush=True)
-                elif is_retryable_market_error(error):
-                    delay = backoff.fail(time.monotonic())
-                    print(
-                        f"{bot.name}: transient/rate-limit market data error: {error}; "
-                        f"retrying in {delay:g}s (exponential backoff)",
-                        flush=True,
-                    )
-                else:
-                    print(f"{bot.name}: non-retryable market data error: {error}; disabling this bot", flush=True)
+                    next_poll_at[bot.name] = time.monotonic() + args.poll
+                    if bot.name not in verified_bots:
+                        print(f"{bot.name}: fresh 1m candles through {candle_end}", flush=True)
+                        verified_bots.add(bot.name)
+                    if args.once:
+                        print(
+                            f"{bot.name}: data OK, {len(candles)} candles; "
+                            f"latest closed candle {candle_end}",
+                            flush=True,
+                        )
+                except ccxt.BaseError as error:
+                    failures.append(f"{bot.name}: {error}")
+                    if args.once:
+                        print(f"{bot.name}: market data error: {error}", flush=True)
+                    elif is_retryable_market_error(error):
+                        delay = backoff.fail(time.monotonic())
+                        next_poll_at[bot.name] = backoff.retry_at
+                        retry_at = iso_timestamp(time.time() + delay)
+                        dashboard_state.update_status(
+                            bot.name, "retrying", str(error), retry_at=retry_at
+                        )
+                        print(
+                            f"{bot.name}: transient/rate-limit market data error: {error}; "
+                            f"retrying in {delay:g}s (independent exponential backoff)",
+                            flush=True,
+                        )
+                    else:
+                        message = f"{bot.name}: non-retryable market data error: {error}; disabling this bot"
+                        dashboard_state.update_status(bot.name, "disabled", str(error))
+                        print(message, flush=True)
+                        disabled_bots.add(bot.name)
+                except StateError as error:
+                    message = f"{bot.name}: paper state recovery stopped: {error}"
+                    dashboard_state.update_status(bot.name, "disabled", str(error))
+                    print(message, flush=True)
+                    failures.append(message)
                     disabled_bots.add(bot.name)
-            except StateError as error:
-                message = f"{bot.name}: paper state recovery stopped: {error}"
-                print(message, flush=True)
-                failures.append(message)
-                disabled_bots.add(bot.name)
-        if args.once:
-            if failures:
-                raise SystemExit("Market data check failed: " + "; ".join(failures))
-            break
-        time.sleep(args.poll)
+
+            if args.once:
+                if failures:
+                    raise SystemExit("Market data check failed: " + "; ".join(failures))
+                break
+
+            waiting = [
+                max(0.0, next_poll_at[bot.name] - time.monotonic())
+                for bot in active_bots
+                if bot.name not in disabled_bots
+            ]
+            time.sleep(min(waiting) if waiting else args.poll)
+    finally:
+        if dashboard_server is not None:
+            dashboard_server.shutdown()
+            dashboard_server.server_close()
 
 
 if __name__ == "__main__":

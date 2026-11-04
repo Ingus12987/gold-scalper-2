@@ -9,6 +9,7 @@ Two independent 1-minute trend scalp **paper** bots, using public BingX market d
 - Open positions, closed trades, P&L, and the last processed candle persist locally in `logs/*_state.json`
 - Approximate fee 0.05% per side, no slippage or funding; **not** an exchange demo account or a profitability guarantee
 - Logs in `logs/btc_trades.csv` and `logs/gold_trades.csv`
+- Read-only mobile dashboard at `/`, served locally with the bot; its refreshes do not call BingX
 
 ## Run (Termux or Python 3)
 
@@ -37,6 +38,14 @@ unprocessed candles still returned by BingX are replayed for saved open position
 If an open position is older than the candle history BingX returns, that bot
 stops rather than guessing whether a simulated stop or target was reached.
 
-Transient BingX errors (including code `100410` and rate limits) use independent
-per-market exponential backoff, capped at five minutes. `--once` validates that
-each market has a fresh, completed 1-minute candle and prints its UTC close time.
+Normal market polling runs at most once per minute per bot. Transient BingX errors
+(including code `100410` and rate limits) use independent per-market exponential
+backoff, capped at five minutes. Stale or malformed candles are rejected and
+never passed to the strategy. If recovery cannot safely replay an open position's
+risk checks, that bot stops rather than guessing. `--once` validates that each
+market has a fresh, completed 1-minute candle and prints its UTC close time.
+
+The dashboard reads each bot's saved state and live feed status. Unrealized PnL
+uses only a fresh, completed candle close and includes an estimated round-trip
+fee; if the mark is stale or missing, unrealized and cumulative PnL are shown as
+unavailable. The dashboard is read-only and does not submit exchange orders.

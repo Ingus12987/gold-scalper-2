@@ -1,11 +1,14 @@
 import csv
+import json
 import tempfile
 import time
+import urllib.request
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 import ccxt
 from dual_demo import (
+    DashboardState,
     ExponentialBackoff,
     MarketDataError,
     PaperBot,
@@ -14,6 +17,7 @@ from dual_demo import (
     is_retryable_market_error,
     latest_closed_candle,
     main,
+    start_dashboard,
 )
 
 
@@ -205,7 +209,7 @@ class PaperBotTests(unittest.TestCase):
                 if len(waits) >= 2:
                     raise KeyboardInterrupt
 
-            with patch('sys.argv', ['dual_demo.py', '--poll', '5']), \
+            with patch('sys.argv', ['dual_demo.py', '--poll', '60']), \
                     patch('dual_demo.Path', return_value=folder), \
                     patch('dual_demo.ccxt.bingx') as exchange_factory, \
                     patch('dual_demo.time.monotonic', side_effect=lambda: clock[0]), \
@@ -220,7 +224,7 @@ class PaperBotTests(unittest.TestCase):
                     main()
                 self.assertEqual(exchange.load_markets.call_count, 2)
                 self.assertEqual(exchange.fetch_ohlcv.call_count, 2)
-            self.assertEqual(waits, [5., 5.])
+            self.assertEqual(waits, [60., 60.])
 
     def test_once_attempts_both_symbols_and_reports_individual_candle_failure(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -295,7 +299,7 @@ class PaperBotTests(unittest.TestCase):
                 if clock[0] >= 30:
                     raise KeyboardInterrupt
 
-            with patch('sys.argv', ['dual_demo.py', '--poll', '5']), \
+            with patch('sys.argv', ['dual_demo.py', '--poll', '60']), \
                     patch('dual_demo.Path', return_value=folder), \
                     patch('dual_demo.ccxt.bingx') as exchange_factory, \
                     patch('dual_demo.time.monotonic', side_effect=lambda: clock[0]), \
@@ -307,9 +311,63 @@ class PaperBotTests(unittest.TestCase):
                 with self.assertRaises(KeyboardInterrupt):
                     main()
 
-            self.assertGreaterEqual(len(btc_attempts), 5)
-            self.assertGreaterEqual(len(xaut_attempts), 4)
-            self.assertEqual(xaut_attempts[:3], [0., 5., 15.])
+            self.assertGreaterEqual(len(btc_attempts), 4)
+            self.assertEqual(len(xaut_attempts), 3)
+            self.assertEqual(xaut_attempts, [0., 60., 180.])
+
+    def test_dashboard_state_shows_pnl_only_with_a_fresh_mark(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bot = PaperBot('BTC', 'BTC/USDT:USDT', Path(tmp))
+            now_ms = int(time.time() * 1000)
+            bot.position = {
+                'side': 'LONG', 'entry': 100., 'stop': 99.7, 'take': 100.6,
+            }
+            bot.last_price = 101.
+            bot.last_mark_stamp = (now_ms // 60_000) * 60_000 - 60_000
+            bot.pnl = 0.25
+            bot._persist()
+            state = DashboardState([bot])
+            state.update_status(
+                'BTC', 'fresh',
+                last_market_data_at='2026-11-04T10:00:00+00:00',
+            )
+            snapshot = state.snapshot(now_ms)['bots'][0]
+            self.assertEqual(snapshot['status'], 'fresh')
+            self.assertGreater(snapshot['unrealized_pnl_usdt'], 0)
+            self.assertAlmostEqual(
+                snapshot['cumulative_pnl_usdt'],
+                snapshot['realized_pnl_usdt'] + snapshot['unrealized_pnl_usdt'],
+            )
+            stale = state.snapshot(now_ms + 240_000)['bots'][0]
+            self.assertEqual(stale['status'], 'stale')
+            self.assertIsNone(stale['mark_price'])
+            self.assertIsNone(stale['unrealized_pnl_usdt'])
+            self.assertIsNone(stale['cumulative_pnl_usdt'])
+
+    def test_dashboard_http_api_is_read_only_and_returns_saved_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bot = PaperBot('GOLD', 'XAUT/USDT:USDT', Path(tmp))
+            bot.position = {
+                'side': 'SHORT', 'entry': 100., 'stop': 100.3, 'take': 99.4,
+            }
+            bot.last_price = 100.
+            bot.last_mark_stamp = (int(time.time() * 1000) // 60_000) * 60_000 - 60_000
+            bot._persist()
+            state = DashboardState([bot])
+            server = start_dashboard(state, port=0)
+            try:
+                base = f'http://127.0.0.1:{server.server_port}'
+                with urllib.request.urlopen(base + '/api/state', timeout=2) as response:
+                    payload = json.loads(response.read())
+                    self.assertEqual(payload['mode'], 'paper-only')
+                    self.assertEqual(payload['bots'][0]['symbol'], 'XAUT/USDT:USDT')
+                    self.assertEqual(payload['bots'][0]['open_position']['side'], 'SHORT')
+                with urllib.request.urlopen(base + '/', timeout=2) as response:
+                    self.assertEqual(response.status, 200)
+                    self.assertIn(b'<html', response.read().lower())
+            finally:
+                server.shutdown()
+                server.server_close()
 
 
 if __name__ == '__main__':

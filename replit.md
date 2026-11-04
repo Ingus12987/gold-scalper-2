@@ -1,13 +1,13 @@
 # Running on Replit
 
-This is a Python 3.12 console application, not a website. Keep its existing
-structure and paper-only behavior; no exchange orders or API keys are needed.
+This is a Python 3.12 paper-trading bot with a read-only mobile dashboard. Keep
+its existing paper-only behavior; no exchange orders or API keys are needed.
 
 ## Run and stop
 
 - Use **Run** to start the **Paper trading bot** workflow.
-- The workflow runs `python -u dual_demo.py`. Output appears in the Console;
-  there is no web preview or listening port.
+- The workflow runs `python -u dual_demo.py`, serves the dashboard on port 5000,
+  and writes bot status to the Console.
 - Use **Stop** to stop the bot, or Ctrl+C when running it in the Shell.
 - Dependencies are declared in `requirements.txt`.
 
@@ -15,7 +15,9 @@ structure and paper-only behavior; no exchange orders or API keys are needed.
 
 - Unit tests: `python -m unittest -v`
 - One live-data pass for both markets: `python -u dual_demo.py --once`
-- Polling defaults to 15 seconds; `--poll` must be at least 5.
+- Normal public market-data polling defaults to once per minute per market;
+  `--poll` must be at least 60 seconds.
+- Dashboard GET requests read local persisted state and do not call BingX.
 
 ## Markets and logs
 
@@ -40,7 +42,9 @@ by Git and are not an exchange demo account; fees are approximate and
 slippage/funding are not modeled.
 
 Transient BingX/rate-limit errors, including `100410`, are retried with
-independent per-market exponential backoff (up to five minutes). The first
-successful fetch logs the UTC close time of the newest fresh 1-minute candle.
+independent per-market exponential backoff (up to five minutes). Stale or
+malformed candles do not reach the strategy. The first successful fetch logs the
+UTC close time of the newest fresh 1-minute candle. The dashboard marks stale
+prices and withholds unrealized PnL when a fresh mark is unavailable.
 Use `python -u dual_demo.py --once` to verify both market feeds without starting
 the continuous polling loop.
