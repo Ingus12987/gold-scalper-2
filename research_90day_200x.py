@@ -2,7 +2,8 @@
 import argparse
 import time
 import ccxt
-from research_strategy import SYMBOLS, ema
+from research_strategy import ema
+SYMBOLS = {"BTC": "BTC/USDT:USDT"}
 
 BAR = 300_000
 MARGIN = 20.0
@@ -39,7 +40,7 @@ def fetch_history(exchange, symbol, days):
         raise RuntimeError(f"Incomplete history: {len(ordered)}/{days*288} bars")
     return ordered
 
-def simulate(bars, first_entry_index=55):
+def simulate(bars):
     close = [float(c[4]) for c in bars]
     fast, slow, trend = ema(close,9), ema(close,21), ema(close,50)
     trades = []
@@ -58,8 +59,7 @@ def simulate(bars, first_entry_index=55):
                 gross = side * (price/entry-1)*NOTIONAL
                 fees = (1+price/entry)*NOTIONAL*FEE_RATE
                 net = max(-MARGIN, gross-fees) if liq_hit else gross-fees
-                if i >= first_entry_index:
-                    trades.append((net, "LIQ" if liq_hit else "SL" if stop_hit else "TP"))
+                trades.append((i, net, "LIQ" if liq_hit else "SL" if stop_hit else "TP"))
                 position = None
                 cooldown = i+3
             continue
@@ -83,16 +83,15 @@ def simulate(bars, first_entry_index=55):
                 gross=side*(price/entry-1)*NOTIONAL
                 fees=(1+price/entry)*NOTIONAL*FEE_RATE
                 net=max(-MARGIN,gross-fees) if liq_hit else gross-fees
-                if i >= first_entry_index:
-                    trades.append((net,"LIQ" if liq_hit else "SL" if stop_hit else "TP"))
+                trades.append((i,net,"LIQ" if liq_hit else "SL" if stop_hit else "TP"))
                 position=None
                 cooldown=i+3
     return trades
 
 def report(label, trades):
-    print(f"{label}: trades={len(trades)} wins={sum(p>0 for p,_ in trades)} "
-          f"liquidations={sum(reason=='LIQ' for _,reason in trades)} "
-          f"net={sum(p for p,_ in trades):+.3f} USDT", flush=True)
+    print(f"{label}: trades={len(trades)} wins={sum(p>0 for _,p,_ in trades)} "
+          f"liquidations={sum(reason=='LIQ' for _,_,reason in trades)} "
+          f"net={sum(p for _,p,_ in trades):+.3f} USDT", flush=True)
 
 def main():
     parser=argparse.ArgumentParser()
@@ -107,9 +106,15 @@ def main():
             print(f"\n{name}: fetching {args.days} days",flush=True)
             bars=fetch_history(ex,symbol,args.days)
             split=5*288
-            report(name+" first 5 days",simulate(bars[:split]))
-            report(name+" last 2 days",simulate(bars[split-55:],first_entry_index=55))
-            report(name+" full 7 days",simulate(bars))
+            trades = simulate(bars)
+            first = [t for t in trades if t[0] < split]
+            last = [t for t in trades if t[0] >= split]
+            report(name+" first 5 days (exit date)", first)
+            report(name+" last 2 days (exit date)", last)
+            report(name+" full 7 days", trades)
+            assert len(first) + len(last) == len(trades)
+            assert abs(sum(t[1] for t in first) + sum(t[1] for t in last) - sum(t[1] for t in trades)) < 1e-8
+            print("CHECK OK: period totals reconcile")
         except (ccxt.BaseError,RuntimeError) as e:
             print(f"{name}: FAILED {e}",flush=True)
 
