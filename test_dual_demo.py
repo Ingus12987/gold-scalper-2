@@ -297,7 +297,7 @@ class PaperBotTests(unittest.TestCase):
 
             def sleep(seconds):
                 clock[0] += seconds
-                if clock[0] >= 30:
+                if clock[0] >= 240:
                     raise KeyboardInterrupt
 
             with patch('sys.argv', ['dual_demo.py', '--poll', '60']), \
