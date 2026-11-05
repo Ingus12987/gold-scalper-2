@@ -24,7 +24,7 @@ def fetch_history(exchange, symbol, days):
         limit = min(900, (end - since) // BAR)
         batch = exchange.fetch_ohlcv(symbol, "5m", since=since, limit=limit)
         if not batch:
-            raise RuntimeError("Empty candle page")
+            raise RuntimeError(f"Empty candle page at {since}; historical lookback may be limited")
         for c in batch:
             t = int(c[0])
             if start <= t < end:
@@ -135,10 +135,21 @@ def main():
     ex.load_markets()
     print(f"PAPER ONLY: 5m, margin {MARGIN:g} USDT, leverage {LEVERAGE:g}x, notional {NOTIONAL:g} USDT")
     print("Liquidation approximation excludes maintenance margin, funding, slippage and gaps.")
+    print("Alternative exchange prices may differ from BingX.")
     for name,symbol in SYMBOLS.items():
         try:
             print(f"\n{name}: fetching {args.days} days",flush=True)
-            bars=fetch_history(ex,symbol,args.days)
+            try:
+                bars=fetch_history(ex,symbol,args.days)
+                source="BingX"
+            except (ccxt.BaseError, RuntimeError) as primary_error:
+                print(f"BingX unavailable: {primary_error}", flush=True)
+                print("Trying Binance USD-M futures candles instead", flush=True)
+                alternative=ccxt.binanceusdm({"enableRateLimit":True,"timeout":20000})
+                alternative.load_markets()
+                bars=fetch_history(alternative,symbol,args.days)
+                source="Binance USD-M futures"
+            print(f"DATA SOURCE: {source}; simulated trades only", flush=True)
             split=83*288
             baseline = simulate(bars)
             print("BASELINE (EMA9/21 + EMA50):")
