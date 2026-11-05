@@ -702,7 +702,19 @@ def main():
                     next_poll_at[bot.name] = backoff.retry_at
                     continue
                 try:
-                    candles = exchange.fetch_ohlcv(bot.symbol, "1m", limit=80)
+                    # Request enough history to replay a persisted paper position.
+                    # A short 80-candle window loses stop/take events after downtime.
+                    # If the exchange cannot provide the entire gap, keep the
+                    # existing safe halt rather than inventing an exit price.
+                    since = (
+                        max(0, bot.last_stamp - 60_000)
+                        if bot.position is not None and bot.last_stamp is not None
+                        else None
+                    )
+                    candles = exchange.fetch_ohlcv(
+                        bot.symbol, "1m", since=since,
+                        limit=1000 if since is not None else 80,
+                    )
                     latest_closed = latest_closed_candle(candles)
                     bot.update(candles, newest_closed=latest_closed)
                     backoff.reset()
