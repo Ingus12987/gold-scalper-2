@@ -711,10 +711,12 @@ def main():
                         if bot.position is not None and bot.last_stamp is not None
                         else None
                     )
-                    candles = exchange.fetch_ohlcv(
-                        bot.symbol, "1m", since=since,
-                        limit=1000 if since is not None else 80,
-                    )
+                    if since is None:
+                        candles = exchange.fetch_ohlcv(bot.symbol, "1m", limit=80)
+                    else:
+                        candles = exchange.fetch_ohlcv(
+                            bot.symbol, "1m", since=since, limit=1000,
+                        )
                     latest_closed = latest_closed_candle(candles)
                     bot.update(candles, newest_closed=latest_closed)
                     backoff.reset()
