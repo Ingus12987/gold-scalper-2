@@ -213,7 +213,8 @@ class PaperBotTests(unittest.TestCase):
                     patch('dual_demo.Path', return_value=folder), \
                     patch('dual_demo.ccxt.bingx') as exchange_factory, \
                     patch('dual_demo.time.monotonic', side_effect=lambda: clock[0]), \
-                    patch('dual_demo.time.sleep', side_effect=sleep):
+                    patch('dual_demo.time.sleep', side_effect=sleep), \
+                    patch('dual_demo.start_dashboard'):
                 exchange = exchange_factory.return_value
                 exchange.load_markets.side_effect = [
                     ccxt.OperationFailed('BingX code 100410: try again later'),
@@ -296,14 +297,15 @@ class PaperBotTests(unittest.TestCase):
 
             def sleep(seconds):
                 clock[0] += seconds
-                if clock[0] >= 30:
+                if clock[0] >= 240:
                     raise KeyboardInterrupt
 
             with patch('sys.argv', ['dual_demo.py', '--poll', '60']), \
                     patch('dual_demo.Path', return_value=folder), \
                     patch('dual_demo.ccxt.bingx') as exchange_factory, \
                     patch('dual_demo.time.monotonic', side_effect=lambda: clock[0]), \
-                    patch('dual_demo.time.sleep', side_effect=sleep):
+                    patch('dual_demo.time.sleep', side_effect=sleep), \
+                    patch('dual_demo.start_dashboard'):
                 exchange = exchange_factory.return_value
                 exchange.load_markets.return_value = {
                     'BTC/USDT:USDT': {}, 'XAUT/USDT:USDT': {}}
