@@ -51,11 +51,15 @@ def main():
     exchange.load_markets()
     balance, position, last_signal, last_exit = 100.0, None, None, 0
     recent = deque(maxlen=5)
+    candles = None
+    next_candles_at = 0
+    backoff = 2
     print("PAPER ONLY | BTC/USDT | tick exits | 1m trend data | 50x simulated | NO LIVE ORDERS", flush=True)
     while True:
         try:
             ticker = exchange.fetch_ticker(SYMBOL)
             price = float(ticker["last"])
+            backoff = 2
             now = time.time()
             if position:
                 direction = 1 if position["side"] == "LONG" else -1
@@ -71,7 +75,9 @@ def main():
                 if reason:
                     balance = record(position, price, reason, balance)
                     position, last_exit = None, now
-            candles = exchange.fetch_ohlcv(SYMBOL, "1m", limit=55)
+            if now >= next_candles_at or candles is None:
+                candles = exchange.fetch_ohlcv(SYMBOL, "1m", limit=55)
+                next_candles_at = now + 20
             closed = candles[:-1]
             if len(closed) < 50:
                 raise RuntimeError("Not enough closed candles")
@@ -92,8 +98,11 @@ def main():
                 last_signal = candle_id
                 print(f'WAIT | BTC {price:.2f} | signal {signal or "NONE"} | balance {balance:.2f}', flush=True)
         except (ccxt.BaseError, RuntimeError, TypeError, ValueError, KeyError) as exc:
-            print(f"DATA ERROR (no new trade): {exc}", flush=True)
-        time.sleep(1)
+            print(f"DATA ERROR (no new trade): {exc}; retry in {backoff}s", flush=True)
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 60)
+            continue
+        time.sleep(2)
 
 if __name__ == "__main__":
     try:
