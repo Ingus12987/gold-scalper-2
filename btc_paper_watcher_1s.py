@@ -1,4 +1,4 @@
-"""Read-only BTC price watcher. Five-minute signals, one-second polling. No orders."""
+"""Read-only BTC price watcher. One-minute signals, one-second polling. No orders."""
 import time
 import ccxt
 from research_90day_50x_atr import ema, rsi_series, atr_series
@@ -7,10 +7,10 @@ def main():
     exchange = ccxt.bingx({"enableRateLimit": True, "timeout": 10000})
     exchange.load_markets()
     previous = None
-    print("DEMO WATCHER | BTC/USDT | 5m signals | 1s price checks | 50x reference only")
+    print("DEMO WATCHER | BTC/USDT | 1m signals | 1s price checks | 50x reference only")
     while True:
         try:
-            candles = exchange.fetch_ohlcv("BTC/USDT:USDT", "5m", limit=100)
+            candles = exchange.fetch_ohlcv("BTC/USDT:USDT", "1m", limit=100)
             if len(candles) < 60:
                 raise RuntimeError("Insufficient history")
             closed = candles[:-1]
@@ -33,7 +33,7 @@ def main():
                     signal = "SHORT"
                 if atr[j] is None or not 0.0015 <= atr[j]/prices[j] <= 0.008:
                     signal = "WAIT"
-                print(f"Closed 5m candle {candle_id}: {signal}; BTC price {price}", flush=True)
+                print(f"Closed 1m candle {candle_id}: {signal}; BTC price {price}", flush=True)
         except (ccxt.BaseError, RuntimeError, TypeError, ValueError) as exc:
             print(f"Price fetch error: {exc}", flush=True)
         time.sleep(1)
