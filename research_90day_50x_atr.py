@@ -129,7 +129,7 @@ def report(label, trades):
 
 def main():
     parser=argparse.ArgumentParser()
-    parser.add_argument("--days",type=int,default=90,choices=[90])
+    parser.add_argument("--days",type=int,default=7,choices=[7,30,90])
     args=parser.parse_args()
     ex=ccxt.bingx({"enableRateLimit":True,"timeout":20000})
     ex.load_markets()
@@ -144,26 +144,28 @@ def main():
                 source="BingX"
             except (ccxt.BaseError, RuntimeError) as primary_error:
                 print(f"BingX unavailable: {primary_error}", flush=True)
+                print("BingX data unavailable; do not bypass exchange location restrictions.", flush=True)
+                raise RuntimeError("No reliable BingX history for this period")
                 print("Trying Binance USD-M futures candles instead", flush=True)
                 alternative=ccxt.binanceusdm({"enableRateLimit":True,"timeout":20000})
                 alternative.load_markets()
                 bars=fetch_history(alternative,symbol,args.days)
                 source="Binance USD-M futures"
             print(f"DATA SOURCE: {source}; simulated trades only", flush=True)
-            split=83*288
+            split=max(1,args.days-2)*288
             baseline = simulate(bars)
             print("BASELINE (EMA9/21 + EMA50):")
-            report("  full 90 days", baseline)
+            report(f"  full {args.days} days", baseline)
             rsi_only = simulate(bars, use_rsi=True)
             print("RSI ONLY (EMA9/21 + EMA50 + RSI14):")
-            report("  full 90 days", rsi_only)
+            report(f"  full {args.days} days", rsi_only)
             trades = simulate(bars, use_rsi=True, use_atr=True)
             print("TEST (EMA9/21 + EMA50 + RSI14 + ATR14 filter 0.15%-0.8%):")
             first = [t for t in trades if t[0] < split]
             last = [t for t in trades if t[0] >= split]
-            report(name+" first 83 days (exit date)", first)
-            report(name+" last 7 days (exit date)", last)
-            report(name+" full 90 days", trades)
+            report(f"{name} first {args.days-2} days (exit date)", first)
+            report(name+" last 2 days (exit date)", last)
+            report(f"{name} full {args.days} days", trades)
             assert len(first) + len(last) == len(trades)
             assert abs(sum(t[1] for t in first) + sum(t[1] for t in last) - sum(t[1] for t in trades)) < 1e-8
             print("CHECK OK: period totals reconcile")
