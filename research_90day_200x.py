@@ -1,4 +1,4 @@
-"""90-day 5-minute 200x historical stress test; no live orders."""
+"""7-day 5-minute 200x historical stress test; no live orders."""
 import argparse
 import time
 import ccxt
@@ -96,7 +96,7 @@ def report(label, trades):
 
 def main():
     parser=argparse.ArgumentParser()
-    parser.add_argument("--days",type=int,default=90,choices=[90])
+    parser.add_argument("--days",type=int,default=7,choices=[7])
     args=parser.parse_args()
     ex=ccxt.bingx({"enableRateLimit":True,"timeout":20000})
     ex.load_markets()
@@ -106,10 +106,10 @@ def main():
         try:
             print(f"\n{name}: fetching {args.days} days",flush=True)
             bars=fetch_history(ex,symbol,args.days)
-            split=69*288
-            report(name+" first 69 days",simulate(bars[:split]))
-            report(name+" last 21 days",simulate(bars[split-55:],first_entry_index=55))
-            report(name+" full 90 days",simulate(bars))
+            split=5*288
+            report(name+" first 5 days",simulate(bars[:split]))
+            report(name+" last 2 days",simulate(bars[split-55:],first_entry_index=55))
+            report(name+" full 7 days",simulate(bars))
         except (ccxt.BaseError,RuntimeError) as e:
             print(f"{name}: FAILED {e}",flush=True)
 
