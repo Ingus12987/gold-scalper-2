@@ -1,0 +1,9 @@
+# Paper trading only. No API keys or live orders.
+SYMBOL = "XAUT-USDT"
+START_BALANCE = 100.0
+MARGIN = 5.0
+LEVERAGE = 20
+MAX_POSITIONS = 1
+MAX_RISK_USDT = 1.0
+MAX_DAILY_LOSS = 5.0
+TAKER_FEE = 0.0005
