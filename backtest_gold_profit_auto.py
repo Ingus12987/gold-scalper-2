@@ -35,7 +35,9 @@ def direction(closes, min_ema_gap_pct=0.0):
         return "SHORT"
     return None
 
-def backtest(bars, take_profit=TAKE_PROFIT_NET, stop_loss=STOP_LOSS_NET, return_trades=False, min_ema_gap_pct=0.0, extra_cost_rate=0.0):
+def backtest(bars, take_profit=TAKE_PROFIT_NET, stop_loss=STOP_LOSS_NET, return_trades=False, min_ema_gap_pct=0.0, extra_cost_rate=0.0, allowed_side=None):
+    if allowed_side not in (None, 'LONG', 'SHORT'):
+        raise ValueError('allowed_side must be LONG, SHORT or None')
     if extra_cost_rate < 0 or extra_cost_rate >= 0.5:
         raise ValueError("extra_cost_rate must be between 0 and 0.5")
     balance = START_BALANCE
@@ -53,7 +55,7 @@ def backtest(bars, take_profit=TAKE_PROFIT_NET, stop_loss=STOP_LOSS_NET, return_
         if min(o, h, l, c) <= 0 or l > min(o, c) or h < max(o, c):
             raise ValueError(f"Invalid OHLC bar at index {i}")
         # Pending signal from the PREVIOUS closed candle.
-        if (position is None and pending and ts - last_exit_time >= 30000
+        if (position is None and pending and (allowed_side is None or pending == allowed_side) and ts - last_exit_time >= 30000
                 and loss_by_day.get(day, 0) < DAILY_LOSS_LIMIT):
             steps = max(0, int((balance - START_BALANCE) // GROWTH_STEP))
             notional = min(MAX_NOTIONAL, BASE_NOTIONAL * (1 + 0.1 * steps))
@@ -123,6 +125,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("csv_path", help="Historical 1m OHLC CSV")
     parser.add_argument("--compare", action="store_true", help="Compare paper TP/SL variants on identical candles")
+    parser.add_argument("--test-side", action="store_true", help="Compare LONG-only, SHORT-only and both on chronological train and holdout")
     parser.add_argument("--cost-stress", action="store_true", help="Stress test C strategy with extra per-side execution costs")
     parser.add_argument("--test-trend-filter", action="store_true", help="Compare fixed EMA gap thresholds on train and untouched holdout")
     parser.add_argument("--diagnose-c", action="store_true", help="Break down C strategy trades by month and side")
@@ -140,6 +143,14 @@ def main():
     print("CANDLE QUALITY", quality)
     if quality["gaps"] or quality["irregular_intervals"]:
         print("DATA QUALITY WARNING: missing/irregular minutes; interpret performance cautiously")
+    if args.test_side:
+        cut = int(len(bars) * 0.70)
+        for side in (None, "LONG", "SHORT"):
+            train = backtest(bars[:cut], take_profit=2.5, stop_loss=-3.0, allowed_side=side, extra_cost_rate=0.0002)
+            holdout = backtest(bars[cut:], take_profit=2.5, stop_loss=-3.0, allowed_side=side, extra_cost_rate=0.0002)
+            print("SIDE FILTER", side or "BOTH", "TRAIN", train, "HOLDOUT", holdout)
+        print("SIDE FILTER NOTE: choose candidate using TRAIN only; HOLDOUT is confirmation, not optimization")
+        return
     if args.cost_stress:
         cut = int(len(bars) * 0.70)
         for extra in (0.0, 0.0002, 0.0005):
