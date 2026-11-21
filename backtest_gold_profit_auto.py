@@ -15,7 +15,7 @@ from gold_profit_auto import (
 )
 import pandas as pd
 
-def direction(closes):
+def direction(closes, min_ema_gap_pct=0.0):
     s = pd.Series(closes, dtype=float)
     if len(s) < 30:
         return None
@@ -27,13 +27,15 @@ def direction(closes):
     if loss <= 0:
         return None
     rsi = 100 - 100 / (1 + gain / loss)
+    if abs(e9 - e21) / e21 * 100 < min_ema_gap_pct:
+        return None
     if e9 > e21 and 50 < rsi < 70:
         return "LONG"
     if e9 < e21 and 30 < rsi < 50:
         return "SHORT"
     return None
 
-def backtest(bars, take_profit=TAKE_PROFIT_NET, stop_loss=STOP_LOSS_NET, return_trades=False):
+def backtest(bars, take_profit=TAKE_PROFIT_NET, stop_loss=STOP_LOSS_NET, return_trades=False, min_ema_gap_pct=0.0):
     balance = START_BALANCE
     position = None
     trades = []
@@ -86,7 +88,7 @@ def backtest(bars, take_profit=TAKE_PROFIT_NET, stop_loss=STOP_LOSS_NET, return_
                 max_drawdown = max(max_drawdown, peak - balance)
         # Only closes through the current completed bar inform next bar.
         if position is None:
-            pending = direction([float(x["close"]) for x in bars[max(0, i-99):i+1]])
+            pending = direction([float(x["close"]) for x in bars[max(0, i-99):i+1]], min_ema_gap_pct=min_ema_gap_pct)
     unrealized = 0.0
     if position is not None:
         final_close = float(bars[-1]["close"])
@@ -109,6 +111,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("csv_path", help="Historical 1m OHLC CSV")
     parser.add_argument("--compare", action="store_true", help="Compare paper TP/SL variants on identical candles")
+    parser.add_argument("--test-trend-filter", action="store_true", help="Compare fixed EMA gap thresholds on train and untouched holdout")
     parser.add_argument("--diagnose-c", action="store_true", help="Break down C strategy trades by month and side")
     parser.add_argument("--validate-c", action="store_true", help="Evaluate selected C variant on chronological holdout last 30 percent")
     args = parser.parse_args()
@@ -119,6 +122,14 @@ def main():
     times = [int(b["time"]) for b in bars]
     if any(b <= a for a, b in zip(times, times[1:])):
         raise SystemExit("Candles must be strictly chronological")
+    if args.test_trend_filter:
+        cut = int(len(bars) * 0.70)
+        for threshold in (0.0, 0.02, 0.05, 0.10):
+            train = backtest(bars[:cut], take_profit=2.5, stop_loss=-3.0, min_ema_gap_pct=threshold)
+            holdout = backtest(bars[cut:], take_profit=2.5, stop_loss=-3.0, min_ema_gap_pct=threshold)
+            print("EMA GAP FILTER", threshold, "TRAIN", train, "HOLDOUT", holdout)
+        print("FILTER NOTE: thresholds are exploratory; choose using train only, then evaluate holdout")
+        return
     if args.diagnose_c:
         summary, trades = backtest(bars, take_profit=2.5, stop_loss=-3.0, return_trades=True)
         print("C FULL PERIOD", summary)
