@@ -1,5 +1,10 @@
 name: Gold historical PAPER backtest
 on:
+  push:
+    paths:
+      - '.github/workflows/gold_backtest.yml'
+      - 'fetch_gold_history.py'
+      - 'backtest_gold_profit_auto.py'
   workflow_dispatch:
 jobs:
   backtest:
