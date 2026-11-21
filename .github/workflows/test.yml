@@ -1,4 +1,4 @@
-name: Test dual paper bots
+name: Test paper trading bots
 on:
   push:
   pull_request:
@@ -14,6 +14,6 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
       - name: Compile Python
-        run: python -m py_compile dual_demo.py test_dual_demo.py
+        run: python -m py_compile dual_demo.py test_dual_demo.py gold_profit_auto.py test_gold_profit_auto.py
       - name: Run unit tests
-        run: python -m unittest -v test_dual_demo.py
+        run: python -m unittest -v test_dual_demo.py test_gold_profit_auto.py
