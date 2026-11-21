@@ -15,11 +15,22 @@ def download(pages=200, limit=1000):
         params = {"symbol": SYMBOL, "interval": "1m", "limit": limit}
         if end_time is not None:
             params["endTime"] = end_time
-        response = requests.get(URL, params=params, timeout=25)
-        response.raise_for_status()
-        payload = response.json()
-        if str(payload.get("code")) != "0":
-            raise RuntimeError(f"BingX response: {payload.get('code')} {payload.get('msg')}")
+        for attempt in range(6):
+            try:
+                response = requests.get(URL, params=params, timeout=25)
+                response.raise_for_status()
+                payload = response.json()
+                if str(payload.get("code")) == "0":
+                    break
+                if str(payload.get("code")) not in ("100410", "100429"):
+                    raise RuntimeError(f"BingX response: {payload.get('code')} {payload.get('msg')}")
+                raise requests.exceptions.RequestException(f"Temporary BingX error {payload.get('code')}")
+            except requests.exceptions.RequestException as exc:
+                if attempt == 5:
+                    raise RuntimeError(f"BingX unavailable after retries: {exc}") from exc
+                delay = min(60, 3 * 2 ** attempt)
+                print(f"API issue: {exc}; retry in {delay}s", flush=True)
+                time.sleep(delay)
         raw = payload.get("data")
         if not isinstance(raw, list) or not raw:
             break
@@ -33,7 +44,7 @@ def download(pages=200, limit=1000):
             break
         end_time = oldest - 1
         print(f"Page {page + 1}: {len(batch)} candles; total unique={len(all_candles)}", flush=True)
-        time.sleep(0.25)
+        time.sleep(1.5)
     candles = [all_candles[k] for k in sorted(all_candles)]
     if len(candles) < 31:
         raise ValueError("No usable historical candles returned")
