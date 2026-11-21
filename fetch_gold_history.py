@@ -8,7 +8,7 @@ import requests
 URL = "https://open-api.bingx.com/openApi/swap/v3/quote/klines"
 SYMBOL = "XAUT-USDT"
 
-def download(pages=10, limit=1000):
+def download(pages=100, limit=1000):
     all_candles = {}
     end_time = None
     for page in range(pages):
@@ -33,7 +33,7 @@ def download(pages=10, limit=1000):
             break
         end_time = oldest - 1
         print(f"Page {page + 1}: {len(batch)} candles; total unique={len(all_candles)}", flush=True)
-        time.sleep(0.2)
+        time.sleep(0.25)
     candles = [all_candles[k] for k in sorted(all_candles)]
     if len(candles) < 31:
         raise ValueError("No usable historical candles returned")
