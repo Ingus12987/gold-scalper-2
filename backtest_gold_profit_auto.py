@@ -33,7 +33,7 @@ def direction(closes):
         return "SHORT"
     return None
 
-def backtest(bars):
+def backtest(bars, take_profit=TAKE_PROFIT_NET, stop_loss=STOP_LOSS_NET):
     balance = START_BALANCE
     position = None
     trades = []
@@ -63,10 +63,10 @@ def backtest(bars):
             def pnl(p):
                 return (p - entry) * qty * sign - (entry + p) * qty * FEE_RATE
             # For both TP and SL hit in one candle, prioritize SL.
-            stop_hit = pnl(l if sign == 1 else h) <= STOP_LOSS_NET
-            target_hit = pnl(h if sign == 1 else l) >= TAKE_PROFIT_NET
+            stop_hit = pnl(l if sign == 1 else h) <= stop_loss
+            target_hit = pnl(h if sign == 1 else l) >= take_profit
             if stop_hit or target_hit:
-                threshold = STOP_LOSS_NET if stop_hit else TAKE_PROFIT_NET
+                threshold = stop_loss if stop_hit else take_profit
                 # Solve net PnL = threshold for price.
                 exit_price = (threshold + entry * qty * (sign + FEE_RATE)) / (qty * (sign - FEE_RATE))
                 # Gap at open is filled at open, not the more favorable threshold.
@@ -107,6 +107,7 @@ def backtest(bars):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("csv_path", help="Historical 1m OHLC CSV")
+    parser.add_argument("--compare", action="store_true", help="Compare paper TP/SL variants on identical candles")
     args = parser.parse_args()
     with open(args.csv_path, newline="") as f:
         bars = list(csv.DictReader(f))
@@ -116,7 +117,10 @@ def main():
     if any(b <= a for a, b in zip(times, times[1:])):
         raise SystemExit("Candles must be strictly chronological")
     result = backtest(bars)
-    print(result)
+    print("BASELINE", result)
+    if args.compare:
+        for tp, sl in ((1.5, -2.0), (2.0, -2.0), (2.5, -3.0), (3.0, -3.0)):
+            print(f"VARIANT TP={tp} SL={sl}", backtest(bars, take_profit=tp, stop_loss=sl))
     if result["trades"] < 100:
         print("NOT ENOUGH TRADES: do not infer strategy quality from this sample")
 
