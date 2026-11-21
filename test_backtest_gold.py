@@ -1,8 +1,17 @@
 import unittest
-from backtest_gold_profit_auto import backtest, direction
+from backtest_gold_profit_auto import backtest, direction, candle_quality
 from gold_profit_auto import START_BALANCE
 
 class BacktestTests(unittest.TestCase):
+    def test_missing_candle_quality(self):
+        bars = [{"time": 0}, {"time": 60000}, {"time": 180000}]
+        self.assertEqual(candle_quality(bars)["missing_minutes"], 1)
+        self.assertEqual(candle_quality(bars)["gaps"], 1)
+
+    def test_duplicate_candle_quality_rejected(self):
+        with self.assertRaises(ValueError):
+            candle_quality([{"time": 0}, {"time": 0}])
+
     def test_extra_cost_validation(self):
         with self.assertRaises(ValueError):
             backtest([], extra_cost_rate=-0.01)
