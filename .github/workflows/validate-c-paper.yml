@@ -22,4 +22,6 @@ jobs:
       - name: Download public candles (no trading)
         run: python fetch_gold_history.py
       - name: C variant out-of-sample paper validation
-        run: python backtest_gold_profit_auto.py gold_history_1m.csv --validate-c
+        run: |
+          python backtest_gold_profit_auto.py gold_history_1m.csv --validate-c
+          python backtest_gold_profit_auto.py gold_history_1m.csv --diagnose-c
