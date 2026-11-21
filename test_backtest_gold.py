@@ -3,6 +3,12 @@ from backtest_gold_profit_auto import backtest, direction, candle_quality
 from gold_profit_auto import START_BALANCE
 
 class BacktestTests(unittest.TestCase):
+    def test_invalid_rsi_band_rejected(self):
+        with self.assertRaises(ValueError):
+            backtest([], rsi_band=0)
+        with self.assertRaises(ValueError):
+            backtest([], rsi_band=51)
+
     def test_negative_volatility_threshold_rejected(self):
         with self.assertRaises(ValueError):
             backtest([], min_range_pct=-0.1)
