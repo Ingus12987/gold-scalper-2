@@ -3,6 +3,10 @@ from backtest_gold_profit_auto import backtest, direction, candle_quality
 from gold_profit_auto import START_BALANCE
 
 class BacktestTests(unittest.TestCase):
+    def test_negative_volatility_threshold_rejected(self):
+        with self.assertRaises(ValueError):
+            backtest([], min_range_pct=-0.1)
+
     def test_side_filter_invalid_rejected(self):
         with self.assertRaises(ValueError):
             backtest([], allowed_side='BOTH')
