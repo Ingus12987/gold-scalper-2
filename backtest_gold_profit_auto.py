@@ -35,7 +35,9 @@ def direction(closes, min_ema_gap_pct=0.0):
         return "SHORT"
     return None
 
-def backtest(bars, take_profit=TAKE_PROFIT_NET, stop_loss=STOP_LOSS_NET, return_trades=False, min_ema_gap_pct=0.0):
+def backtest(bars, take_profit=TAKE_PROFIT_NET, stop_loss=STOP_LOSS_NET, return_trades=False, min_ema_gap_pct=0.0, extra_cost_rate=0.0):
+    if extra_cost_rate < 0 or extra_cost_rate >= 0.5:
+        raise ValueError("extra_cost_rate must be between 0 and 0.5")
     balance = START_BALANCE
     position = None
     trades = []
@@ -61,16 +63,17 @@ def backtest(bars, take_profit=TAKE_PROFIT_NET, stop_loss=STOP_LOSS_NET, return_
             sign = 1 if position["side"] == "LONG" else -1
             qty = position["qty"]
             entry = position["entry"]
-            # Approximate net PnL after both entry and exit taker fees.
+            # Extra cost models adverse spread/slippage on both sides.
+            effective_fee = FEE_RATE + extra_cost_rate
             def pnl(p):
-                return (p - entry) * qty * sign - (entry + p) * qty * FEE_RATE
+                return (p - entry) * qty * sign - (entry + p) * qty * effective_fee
             # For both TP and SL hit in one candle, prioritize SL.
             stop_hit = pnl(l if sign == 1 else h) <= stop_loss
             target_hit = pnl(h if sign == 1 else l) >= take_profit
             if stop_hit or target_hit:
                 threshold = stop_loss if stop_hit else take_profit
                 # Solve net PnL = threshold for price.
-                exit_price = (threshold + entry * qty * (sign + FEE_RATE)) / (qty * (sign - FEE_RATE))
+                exit_price = (threshold + entry * qty * (sign + effective_fee)) / (qty * (sign - effective_fee))
                 # Gap at open is filled at open, not the more favorable threshold.
                 if stop_hit and pnl(o) < threshold:
                     exit_price = o
@@ -95,7 +98,7 @@ def backtest(bars, take_profit=TAKE_PROFIT_NET, stop_loss=STOP_LOSS_NET, return_
         sign = 1 if position["side"] == "LONG" else -1
         qty = position["qty"]
         entry = position["entry"]
-        unrealized = (final_close - entry) * qty * sign - (entry + final_close) * qty * FEE_RATE
+        unrealized = (final_close - entry) * qty * sign - (entry + final_close) * qty * (FEE_RATE + extra_cost_rate)
     winners = sum(t["net"] > 0 for t in trades)
     summary = {"trades": len(trades), "wins": winners,
             "win_rate_pct": round(100 * winners / len(trades), 2) if trades else 0,
@@ -111,6 +114,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("csv_path", help="Historical 1m OHLC CSV")
     parser.add_argument("--compare", action="store_true", help="Compare paper TP/SL variants on identical candles")
+    parser.add_argument("--cost-stress", action="store_true", help="Stress test C strategy with extra per-side execution costs")
     parser.add_argument("--test-trend-filter", action="store_true", help="Compare fixed EMA gap thresholds on train and untouched holdout")
     parser.add_argument("--diagnose-c", action="store_true", help="Break down C strategy trades by month and side")
     parser.add_argument("--validate-c", action="store_true", help="Evaluate selected C variant on chronological holdout last 30 percent")
@@ -122,6 +126,13 @@ def main():
     times = [int(b["time"]) for b in bars]
     if any(b <= a for a, b in zip(times, times[1:])):
         raise SystemExit("Candles must be strictly chronological")
+    if args.cost_stress:
+        cut = int(len(bars) * 0.70)
+        for extra in (0.0, 0.0002, 0.0005):
+            train = backtest(bars[:cut], take_profit=2.5, stop_loss=-3.0, extra_cost_rate=extra)
+            holdout = backtest(bars[cut:], take_profit=2.5, stop_loss=-3.0, extra_cost_rate=extra)
+            print("EXECUTION COST STRESS", extra, "TRAIN", train, "HOLDOUT", holdout)
+        return
     if args.test_trend_filter:
         cut = int(len(bars) * 0.70)
         for threshold in (0.0, 0.02, 0.05, 0.10):
