@@ -20,7 +20,7 @@ jobs:
       - name: Download public XAUT-USDT candles
         run: python fetch_gold_history.py
       - name: Historical PAPER backtest (no orders)
-        run: python backtest_gold_profit_auto.py gold_history_1m.csv
+        run: python backtest_gold_profit_auto.py gold_history_1m.csv --compare
       - name: Upload data for audit
         uses: actions/upload-artifact@v4
         with:
