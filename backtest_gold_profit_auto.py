@@ -108,6 +108,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("csv_path", help="Historical 1m OHLC CSV")
     parser.add_argument("--compare", action="store_true", help="Compare paper TP/SL variants on identical candles")
+    parser.add_argument("--validate-c", action="store_true", help="Evaluate selected C variant on chronological holdout last 30 percent")
     args = parser.parse_args()
     with open(args.csv_path, newline="") as f:
         bars = list(csv.DictReader(f))
@@ -116,6 +117,15 @@ def main():
     times = [int(b["time"]) for b in bars]
     if any(b <= a for a, b in zip(times, times[1:])):
         raise SystemExit("Candles must be strictly chronological")
+    if args.validate_c:
+        cut = int(len(bars) * 0.70)
+        # Separate state and balances: no trades carry over the split.
+        train = backtest(bars[:cut], take_profit=2.5, stop_loss=-3.0)
+        holdout = backtest(bars[cut:], take_profit=2.5, stop_loss=-3.0)
+        print("C TRAIN FIRST 70%", train)
+        print("C HOLDOUT LAST 30%", holdout)
+        print("HOLDOUT STATUS", "PASS" if holdout["trades"] >= 100 and holdout["net_usdt"] > 0 and holdout["max_closed_trade_drawdown_usdt"] < 30 else "NOT VALIDATED")
+        return
     result = backtest(bars)
     print("BASELINE", result)
     if args.compare:
