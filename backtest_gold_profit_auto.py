@@ -110,6 +110,15 @@ def backtest(bars, take_profit=TAKE_PROFIT_NET, stop_loss=STOP_LOSS_NET, return_
             "equity_including_open_usdt": round(balance + unrealized, 2)}
     return (summary, trades) if return_trades else summary
 
+def candle_quality(bars):
+    """Report missing/irregular 1m intervals before trusting a backtest."""
+    times = [int(b["time"]) for b in bars]
+    if any(b <= a for a, b in zip(times, times[1:])):
+        raise ValueError("Candles must be strictly chronological")
+    gaps = [(b - a) // 60000 - 1 for a, b in zip(times, times[1:]) if b - a > 60000]
+    irregular = sum((b - a) % 60000 != 0 for a, b in zip(times, times[1:]))
+    return {"candles": len(times), "gaps": len(gaps), "missing_minutes": sum(gaps), "irregular_intervals": irregular}
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("csv_path", help="Historical 1m OHLC CSV")
@@ -124,8 +133,13 @@ def main():
     if len(bars) < 31:
         raise SystemExit("At least 31 candles required")
     times = [int(b["time"]) for b in bars]
-    if any(b <= a for a, b in zip(times, times[1:])):
-        raise SystemExit("Candles must be strictly chronological")
+    try:
+        quality = candle_quality(bars)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    print("CANDLE QUALITY", quality)
+    if quality["gaps"] or quality["irregular_intervals"]:
+        print("DATA QUALITY WARNING: missing/irregular minutes; interpret performance cautiously")
     if args.cost_stress:
         cut = int(len(bars) * 0.70)
         for extra in (0.0, 0.0002, 0.0005):
