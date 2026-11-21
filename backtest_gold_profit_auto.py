@@ -125,6 +125,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("csv_path", help="Historical 1m OHLC CSV")
     parser.add_argument("--compare", action="store_true", help="Compare paper TP/SL variants on identical candles")
+    parser.add_argument("--walk-forward-side", action="store_true", help="Compare direction robustness in three non-overlapping chronological periods")
     parser.add_argument("--test-side", action="store_true", help="Compare LONG-only, SHORT-only and both on chronological train and holdout")
     parser.add_argument("--cost-stress", action="store_true", help="Stress test C strategy with extra per-side execution costs")
     parser.add_argument("--test-trend-filter", action="store_true", help="Compare fixed EMA gap thresholds on train and untouched holdout")
@@ -143,6 +144,16 @@ def main():
     print("CANDLE QUALITY", quality)
     if quality["gaps"] or quality["irregular_intervals"]:
         print("DATA QUALITY WARNING: missing/irregular minutes; interpret performance cautiously")
+    if args.walk_forward_side:
+        n = len(bars)
+        boundaries = (0, n // 3, 2 * n // 3, n)
+        for period in range(3):
+            segment = bars[boundaries[period]:boundaries[period + 1]]
+            for side in (None, "LONG", "SHORT"):
+                result = backtest(segment, take_profit=2.5, stop_loss=-3.0, allowed_side=side, extra_cost_rate=0.0002)
+                print("WALK FORWARD", "PERIOD", period + 1, "SIDE", side or "BOTH", result)
+        print("WALK FORWARD NOTE: all periods are historical; no strategy selection on final period")
+        return
     if args.test_side:
         cut = int(len(bars) * 0.70)
         for side in (None, "LONG", "SHORT"):
