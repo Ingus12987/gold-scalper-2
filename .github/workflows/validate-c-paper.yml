@@ -26,3 +26,4 @@ jobs:
           python backtest_gold_profit_auto.py gold_history_1m.csv --validate-c
           python backtest_gold_profit_auto.py gold_history_1m.csv --diagnose-c
           python backtest_gold_profit_auto.py gold_history_1m.csv --test-trend-filter
+          python backtest_gold_profit_auto.py gold_history_1m.csv --cost-stress
