@@ -87,13 +87,22 @@ def backtest(bars):
         # Only closes through the current completed bar inform next bar.
         if position is None:
             pending = direction([float(x["close"]) for x in bars[max(0, i-99):i+1]])
+    unrealized = 0.0
+    if position is not None:
+        final_close = float(bars[-1]["close"])
+        sign = 1 if position["side"] == "LONG" else -1
+        qty = position["qty"]
+        entry = position["entry"]
+        unrealized = (final_close - entry) * qty * sign - (entry + final_close) * qty * FEE_RATE
     winners = sum(t["net"] > 0 for t in trades)
     return {"trades": len(trades), "wins": winners,
             "win_rate_pct": round(100 * winners / len(trades), 2) if trades else 0,
             "net_usdt": round(balance - START_BALANCE, 2),
             "ending_balance_usdt": round(balance, 2),
             "max_closed_trade_drawdown_usdt": round(max_drawdown, 2),
-            "open_position_at_end": position is not None}
+            "open_position_at_end": position is not None,
+            "unrealized_pnl_usdt": round(unrealized, 2),
+            "equity_including_open_usdt": round(balance + unrealized, 2)}
 
 def main():
     parser = argparse.ArgumentParser()
@@ -106,8 +115,9 @@ def main():
     times = [int(b["time"]) for b in bars]
     if any(b <= a for a, b in zip(times, times[1:])):
         raise SystemExit("Candles must be strictly chronological")
-    print(backtest(bars))
-    if backtest(bars)["trades"] < 100:
+    result = backtest(bars)
+    print(result)
+    if result["trades"] < 100:
         print("NOT ENOUGH TRADES: do not infer strategy quality from this sample")
 
 if __name__ == "__main__":
