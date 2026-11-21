@@ -30,3 +30,4 @@ jobs:
           python backtest_gold_profit_auto.py gold_history_1m.csv --test-side
           python backtest_gold_profit_auto.py gold_history_1m.csv --walk-forward-side
           python backtest_gold_profit_auto.py gold_history_1m.csv --test-volatility
+          python backtest_gold_profit_auto.py gold_history_1m.csv --test-rsi
