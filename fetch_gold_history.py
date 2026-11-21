@@ -8,7 +8,7 @@ import requests
 URL = "https://open-api.bingx.com/openApi/swap/v3/quote/klines"
 SYMBOL = "XAUT-USDT"
 
-def download(pages=100, limit=1000):
+def download(pages=200, limit=1000):
     all_candles = {}
     end_time = None
     for page in range(pages):
