@@ -33,7 +33,7 @@ def direction(closes):
         return "SHORT"
     return None
 
-def backtest(bars, take_profit=TAKE_PROFIT_NET, stop_loss=STOP_LOSS_NET):
+def backtest(bars, take_profit=TAKE_PROFIT_NET, stop_loss=STOP_LOSS_NET, return_trades=False):
     balance = START_BALANCE
     position = None
     trades = []
@@ -95,7 +95,7 @@ def backtest(bars, take_profit=TAKE_PROFIT_NET, stop_loss=STOP_LOSS_NET):
         entry = position["entry"]
         unrealized = (final_close - entry) * qty * sign - (entry + final_close) * qty * FEE_RATE
     winners = sum(t["net"] > 0 for t in trades)
-    return {"trades": len(trades), "wins": winners,
+    summary = {"trades": len(trades), "wins": winners,
             "win_rate_pct": round(100 * winners / len(trades), 2) if trades else 0,
             "net_usdt": round(balance - START_BALANCE, 2),
             "ending_balance_usdt": round(balance, 2),
@@ -103,11 +103,13 @@ def backtest(bars, take_profit=TAKE_PROFIT_NET, stop_loss=STOP_LOSS_NET):
             "open_position_at_end": position is not None,
             "unrealized_pnl_usdt": round(unrealized, 2),
             "equity_including_open_usdt": round(balance + unrealized, 2)}
+    return (summary, trades) if return_trades else summary
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("csv_path", help="Historical 1m OHLC CSV")
     parser.add_argument("--compare", action="store_true", help="Compare paper TP/SL variants on identical candles")
+    parser.add_argument("--diagnose-c", action="store_true", help="Break down C strategy trades by month and side")
     parser.add_argument("--validate-c", action="store_true", help="Evaluate selected C variant on chronological holdout last 30 percent")
     args = parser.parse_args()
     with open(args.csv_path, newline="") as f:
@@ -117,6 +119,17 @@ def main():
     times = [int(b["time"]) for b in bars]
     if any(b <= a for a, b in zip(times, times[1:])):
         raise SystemExit("Candles must be strictly chronological")
+    if args.diagnose_c:
+        summary, trades = backtest(bars, take_profit=2.5, stop_loss=-3.0, return_trades=True)
+        print("C FULL PERIOD", summary)
+        groups = {}
+        for trade in trades:
+            month = datetime.fromtimestamp(trade["time"] / 1000, timezone.utc).strftime("%Y-%m")
+            key = (month, trade["side"])
+            groups.setdefault(key, []).append(trade["net"])
+        for key, nets in sorted(groups.items()):
+            print("C MONTH SIDE", key[0], key[1], "trades", len(nets), "wins", sum(n > 0 for n in nets), "net_usdt", round(sum(nets), 2))
+        return
     if args.validate_c:
         cut = int(len(bars) * 0.70)
         # Separate state and balances: no trades carry over the split.
