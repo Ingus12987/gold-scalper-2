@@ -35,7 +35,9 @@ def direction(closes, min_ema_gap_pct=0.0):
         return "SHORT"
     return None
 
-def backtest(bars, take_profit=TAKE_PROFIT_NET, stop_loss=STOP_LOSS_NET, return_trades=False, min_ema_gap_pct=0.0, extra_cost_rate=0.0, allowed_side=None):
+def backtest(bars, take_profit=TAKE_PROFIT_NET, stop_loss=STOP_LOSS_NET, return_trades=False, min_ema_gap_pct=0.0, extra_cost_rate=0.0, allowed_side=None, min_range_pct=0.0):
+    if min_range_pct < 0 or min_range_pct >= 100:
+        raise ValueError("min_range_pct must be between 0 and 100")
     if allowed_side not in (None, 'LONG', 'SHORT'):
         raise ValueError('allowed_side must be LONG, SHORT or None')
     if extra_cost_rate < 0 or extra_cost_rate >= 0.5:
@@ -93,7 +95,10 @@ def backtest(bars, take_profit=TAKE_PROFIT_NET, stop_loss=STOP_LOSS_NET, return_
                 max_drawdown = max(max_drawdown, peak - balance)
         # Only closes through the current completed bar inform next bar.
         if position is None:
-            pending = direction([float(x["close"]) for x in bars[max(0, i-99):i+1]], min_ema_gap_pct=min_ema_gap_pct)
+            window = bars[max(0, i-13):i+1]
+            range_pct = 100 * (max(float(x["high"]) for x in window) - min(float(x["low"]) for x in window)) / c
+            if range_pct >= min_range_pct:
+                pending = direction([float(x["close"]) for x in bars[max(0, i-99):i+1]], min_ema_gap_pct=min_ema_gap_pct)
     unrealized = 0.0
     if position is not None:
         final_close = float(bars[-1]["close"])
@@ -125,6 +130,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("csv_path", help="Historical 1m OHLC CSV")
     parser.add_argument("--compare", action="store_true", help="Compare paper TP/SL variants on identical candles")
+    parser.add_argument("--test-volatility", action="store_true", help="Three-period comparison of predeclared 14-bar range filters")
     parser.add_argument("--walk-forward-side", action="store_true", help="Compare direction robustness in three non-overlapping chronological periods")
     parser.add_argument("--test-side", action="store_true", help="Compare LONG-only, SHORT-only and both on chronological train and holdout")
     parser.add_argument("--cost-stress", action="store_true", help="Stress test C strategy with extra per-side execution costs")
@@ -144,6 +150,16 @@ def main():
     print("CANDLE QUALITY", quality)
     if quality["gaps"] or quality["irregular_intervals"]:
         print("DATA QUALITY WARNING: missing/irregular minutes; interpret performance cautiously")
+    if args.test_volatility:
+        n = len(bars)
+        boundaries = (0, n // 3, 2 * n // 3, n)
+        for period in range(3):
+            segment = bars[boundaries[period]:boundaries[period + 1]]
+            for threshold in (0.0, 0.05, 0.10, 0.20):
+                result = backtest(segment, take_profit=2.5, stop_loss=-3.0, extra_cost_rate=0.0002, min_range_pct=threshold)
+                print("VOLATILITY FILTER", "PERIOD", period + 1, "MIN_RANGE_PCT", threshold, result)
+        print("VOLATILITY FILTER NOTE: exploratory historical test, no live orders")
+        return
     if args.walk_forward_side:
         n = len(bars)
         boundaries = (0, n // 3, 2 * n // 3, n)
