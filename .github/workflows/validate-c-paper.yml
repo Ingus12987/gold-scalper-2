@@ -3,6 +3,7 @@ on:
   push:
     paths:
       - 'backtest_gold_profit_auto.py'
+      - 'fetch_gold_history.py'
       - '.github/workflows/validate-c-paper.yml'
   workflow_dispatch:
 jobs:
