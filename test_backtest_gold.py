@@ -3,6 +3,16 @@ from backtest_gold_profit_auto import backtest, direction, candle_quality
 from gold_profit_auto import START_BALANCE
 
 class BacktestTests(unittest.TestCase):
+    def test_side_filter_invalid_rejected(self):
+        with self.assertRaises(ValueError):
+            backtest([], allowed_side='BOTH')
+
+    def test_side_filter_flat_market(self):
+        bars = [{'time': 1700000000000 + i*60000, 'open': 100, 'high': 100, 'low': 100, 'close': 100} for i in range(120)]
+        for side in ('LONG', 'SHORT'):
+            with self.subTest(side=side):
+                self.assertEqual(backtest(bars, allowed_side=side)['trades'], 0)
+
     def test_missing_candle_quality(self):
         bars = [{"time": 0}, {"time": 60000}, {"time": 180000}]
         self.assertEqual(candle_quality(bars)["missing_minutes"], 1)
