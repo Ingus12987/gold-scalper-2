@@ -1,4 +1,4 @@
-"""Download up to 10,000 PUBLIC BingX XAUT-USDT 1m candles. No orders.
+"""Download historical PUBLIC BingX XAUT-USDT 1m candles. No orders.
 Usage: python fetch_gold_history.py
 """
 import csv
@@ -8,7 +8,7 @@ import requests
 URL = "https://open-api.bingx.com/openApi/swap/v3/quote/klines"
 SYMBOL = "XAUT-USDT"
 
-def download(pages=200, limit=1000):
+def download(pages=350, limit=1000):
     all_candles = {}
     end_time = None
     for page in range(pages):
