@@ -1,0 +1,24 @@
+name: Validate C on held-out XAUT history (DEMO)
+on:
+  push:
+    paths:
+      - 'backtest_gold_profit_auto.py'
+      - '.github/workflows/validate-c-paper.yml'
+  workflow_dispatch:
+jobs:
+  validate-c:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Download public candles (no trading)
+        run: python fetch_gold_history.py
+      - name: C variant out-of-sample paper validation
+        run: python backtest_gold_profit_auto.py gold_history_1m.csv --validate-c
