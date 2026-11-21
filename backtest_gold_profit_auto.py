@@ -15,7 +15,7 @@ from gold_profit_auto import (
 )
 import pandas as pd
 
-def direction(closes, min_ema_gap_pct=0.0):
+def direction(closes, min_ema_gap_pct=0.0, rsi_band=20):
     s = pd.Series(closes, dtype=float)
     if len(s) < 30:
         return None
@@ -29,13 +29,15 @@ def direction(closes, min_ema_gap_pct=0.0):
     rsi = 100 - 100 / (1 + gain / loss)
     if abs(e9 - e21) / e21 * 100 < min_ema_gap_pct:
         return None
-    if e9 > e21 and 50 < rsi < 70:
+    if e9 > e21 and 50 < rsi < 50 + rsi_band:
         return "LONG"
-    if e9 < e21 and 30 < rsi < 50:
+    if e9 < e21 and 50 - rsi_band < rsi < 50:
         return "SHORT"
     return None
 
-def backtest(bars, take_profit=TAKE_PROFIT_NET, stop_loss=STOP_LOSS_NET, return_trades=False, min_ema_gap_pct=0.0, extra_cost_rate=0.0, allowed_side=None, min_range_pct=0.0):
+def backtest(bars, take_profit=TAKE_PROFIT_NET, stop_loss=STOP_LOSS_NET, return_trades=False, min_ema_gap_pct=0.0, extra_cost_rate=0.0, allowed_side=None, min_range_pct=0.0, rsi_band=20):
+    if not 0 < rsi_band <= 50:
+        raise ValueError("rsi_band must be between 0 (exclusive) and 50")
     if min_range_pct < 0 or min_range_pct >= 100:
         raise ValueError("min_range_pct must be between 0 and 100")
     if allowed_side not in (None, 'LONG', 'SHORT'):
@@ -98,7 +100,7 @@ def backtest(bars, take_profit=TAKE_PROFIT_NET, stop_loss=STOP_LOSS_NET, return_
             window = bars[max(0, i-13):i+1]
             range_pct = 100 * (max(float(x["high"]) for x in window) - min(float(x["low"]) for x in window)) / c
             if range_pct >= min_range_pct:
-                pending = direction([float(x["close"]) for x in bars[max(0, i-99):i+1]], min_ema_gap_pct=min_ema_gap_pct)
+                pending = direction([float(x["close"]) for x in bars[max(0, i-99):i+1]], min_ema_gap_pct=min_ema_gap_pct, rsi_band=rsi_band)
     unrealized = 0.0
     if position is not None:
         final_close = float(bars[-1]["close"])
@@ -130,6 +132,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("csv_path", help="Historical 1m OHLC CSV")
     parser.add_argument("--compare", action="store_true", help="Compare paper TP/SL variants on identical candles")
+    parser.add_argument("--test-rsi", action="store_true", help="Compare predeclared RSI bands in chronological periods")
     parser.add_argument("--test-volatility", action="store_true", help="Three-period comparison of predeclared 14-bar range filters")
     parser.add_argument("--walk-forward-side", action="store_true", help="Compare direction robustness in three non-overlapping chronological periods")
     parser.add_argument("--test-side", action="store_true", help="Compare LONG-only, SHORT-only and both on chronological train and holdout")
@@ -150,6 +153,16 @@ def main():
     print("CANDLE QUALITY", quality)
     if quality["gaps"] or quality["irregular_intervals"]:
         print("DATA QUALITY WARNING: missing/irregular minutes; interpret performance cautiously")
+    if args.test_rsi:
+        n = len(bars)
+        boundaries = (0, n // 3, 2 * n // 3, n)
+        for period in range(3):
+            segment = bars[boundaries[period]:boundaries[period + 1]]
+            for band in (10, 15, 20, 25):
+                result = backtest(segment, take_profit=2.5, stop_loss=-3.0, extra_cost_rate=0.0002, rsi_band=band)
+                print("RSI BAND", "PERIOD", period + 1, "BAND", band, result)
+        print("RSI BAND NOTE: exploratory historical test; compare all periods before selecting")
+        return
     if args.test_volatility:
         n = len(bars)
         boundaries = (0, n // 3, 2 * n // 3, n)
