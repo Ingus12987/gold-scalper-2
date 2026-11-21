@@ -3,6 +3,10 @@ from backtest_gold_profit_auto import backtest, direction
 from gold_profit_auto import START_BALANCE
 
 class BacktestTests(unittest.TestCase):
+    def test_extra_cost_validation(self):
+        with self.assertRaises(ValueError):
+            backtest([], extra_cost_rate=-0.01)
+
     def test_flat_market_no_trade(self):
         bars = [{"time": 1700000000000 + i*60000,
                  "open": 100, "high": 100, "low": 100, "close": 100}
