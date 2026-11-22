@@ -20,6 +20,17 @@ class BacktestTests(unittest.TestCase):
             self.assertGreaterEqual(trade["holding_minutes"], 0)
         self.assertAlmostEqual(sum(x["net"] for x in trades), summary["net_usdt"], places=2)
 
+    def test_max_hold_validation(self):
+        with self.assertRaises(ValueError):
+            backtest([], max_hold_minutes=0)
+
+    def test_time_exit_occurs_without_tp_or_sl(self):
+        bars = [{"time": 1700000000000 + i * 60000, "open": 100, "high": 100.1, "low": 99.9, "close": 100} for i in range(40)]
+        with patch("backtest_gold_profit_auto.direction", return_value="LONG"):
+            _, trades = backtest(bars, return_trades=True, max_hold_minutes=3, take_profit=50, stop_loss=-50)
+        self.assertTrue(any(t["reason"] == "TIME" for t in trades))
+        self.assertTrue(all(t["holding_minutes"] >= 3 for t in trades if t["reason"] == "TIME"))
+
     def test_negative_cooldown_rejected(self):
         with self.assertRaises(ValueError):
             backtest([], cooldown_minutes=-1)
