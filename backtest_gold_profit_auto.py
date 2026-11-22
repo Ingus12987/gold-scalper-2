@@ -35,7 +35,7 @@ def direction(closes, min_ema_gap_pct=0.0, rsi_band=20):
         return "SHORT"
     return None
 
-def backtest(bars, take_profit=TAKE_PROFIT_NET, stop_loss=STOP_LOSS_NET, return_trades=False, min_ema_gap_pct=0.0, extra_cost_rate=0.0, allowed_side=None, min_range_pct=0.0, rsi_band=20, cooldown_minutes=0.5, max_hold_minutes=None):
+def backtest(bars, take_profit=TAKE_PROFIT_NET, stop_loss=STOP_LOSS_NET, return_trades=False, min_ema_gap_pct=0.0, extra_cost_rate=0.0, allowed_side=None, min_range_pct=0.0, rsi_band=20, cooldown_minutes=0.5, max_hold_minutes=None, fresh_signal_only=False):
     if max_hold_minutes is not None and max_hold_minutes <= 0:
         raise ValueError("max_hold_minutes must be positive or None")
     if cooldown_minutes < 0:
@@ -52,6 +52,7 @@ def backtest(bars, take_profit=TAKE_PROFIT_NET, stop_loss=STOP_LOSS_NET, return_
     position = None
     trades = []
     pending = None
+    previous_signal = None
     last_exit_time = -10**15
     loss_by_day = {}
     peak = balance
@@ -106,12 +107,14 @@ def backtest(bars, take_profit=TAKE_PROFIT_NET, stop_loss=STOP_LOSS_NET, return_
                 last_exit_time = ts
                 peak = max(peak, balance)
                 max_drawdown = max(max_drawdown, peak - balance)
-        # Only closes through the current completed bar inform next bar.
-        if position is None:
-            window = bars[max(0, i-13):i+1]
-            range_pct = 100 * (max(float(x["high"]) for x in window) - min(float(x["low"]) for x in window)) / c
-            if range_pct >= min_range_pct:
-                pending = direction([float(x["close"]) for x in bars[max(0, i-99):i+1]], min_ema_gap_pct=min_ema_gap_pct, rsi_band=rsi_band)
+        # Evaluate every completed candle, including while a position is open.
+        window = bars[max(0, i-13):i+1]
+        range_pct = 100 * (max(float(x["high"]) for x in window) - min(float(x["low"]) for x in window)) / c
+        signal = direction([float(x["close"]) for x in bars[max(0, i-99):i+1]], min_ema_gap_pct=min_ema_gap_pct, rsi_band=rsi_band)
+        eligible_signal = signal if range_pct >= min_range_pct else None
+        if position is None and (not fresh_signal_only or (eligible_signal is not None and eligible_signal != previous_signal)):
+            pending = eligible_signal
+        previous_signal = eligible_signal
     unrealized = 0.0
     if position is not None:
         final_close = float(bars[-1]["close"])
@@ -143,6 +146,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("csv_path", help="Historical 1m OHLC CSV")
     parser.add_argument("--compare", action="store_true", help="Compare paper TP/SL variants on identical candles")
+    parser.add_argument("--test-fresh-signals", action="store_true", help="Compare persistent state against new-signal-only entries")
     parser.add_argument("--test-max-hold", action="store_true", help="Compare time-based exits in three chronological periods")
     parser.add_argument("--diagnose-losses", action="store_true", help="Audit gross PnL, costs, exit reasons and holding time across periods")
     parser.add_argument("--test-cooldown", action="store_true", help="Diagnose repeated-entry churn using predeclared cooldowns")
@@ -167,6 +171,16 @@ def main():
     print("CANDLE QUALITY", quality)
     if quality["gaps"] or quality["irregular_intervals"]:
         print("DATA QUALITY WARNING: missing/irregular minutes; interpret performance cautiously")
+    if args.test_fresh_signals:
+        n = len(bars)
+        boundaries = (0, n // 3, 2 * n // 3, n)
+        for fresh in (False, True):
+            for hold in (None, 30, 120):
+                for period in range(3):
+                    segment = bars[boundaries[period]:boundaries[period + 1]]
+                    summary, trades = backtest(segment, take_profit=2.5, stop_loss=-3.0, extra_cost_rate=0.0002, max_hold_minutes=hold, fresh_signal_only=fresh, return_trades=True)
+                    print("FRESH SIGNAL", fresh, "MAX HOLD", hold, "PERIOD", period + 1, summary, "TIME_EXITS", sum(t["reason"] == "TIME" for t in trades), flush=True)
+        return
     if args.test_max_hold:
         n = len(bars)
         boundaries = (0, n // 3, 2 * n // 3, n)
