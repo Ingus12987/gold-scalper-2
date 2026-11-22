@@ -3,6 +3,10 @@ from backtest_gold_profit_auto import backtest, direction, candle_quality
 from gold_profit_auto import START_BALANCE
 
 class BacktestTests(unittest.TestCase):
+    def test_negative_cooldown_rejected(self):
+        with self.assertRaises(ValueError):
+            backtest([], cooldown_minutes=-1)
+
     def test_invalid_rsi_band_rejected(self):
         with self.assertRaises(ValueError):
             backtest([], rsi_band=0)
