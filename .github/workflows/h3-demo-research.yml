@@ -21,3 +21,6 @@ jobs:
         run: python fetch_gold_history.py
       - name: Train and validation only, with cost stress
         run: python -u research_h3_er_session.py gold_history_1m.csv
+
+      - name: Isolated TRAIN-only LONG trend gate and SHORT regression
+        run: python -u research_long_15m_ema50_train.py gold_history_1m.csv
