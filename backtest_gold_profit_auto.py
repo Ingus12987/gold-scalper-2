@@ -146,6 +146,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("csv_path", help="Historical 1m OHLC CSV")
     parser.add_argument("--compare", action="store_true", help="Compare paper TP/SL variants on identical candles")
+    parser.add_argument("--audit-fresh-losses", action="store_true", help="Fresh-signal losses by side, fees, stops and period")
     parser.add_argument("--test-fresh-ema-gap", action="store_true", help="Three-period fresh-entry EMA gap experiment, no forced time exit")
     parser.add_argument("--test-fresh-signals", action="store_true", help="Compare persistent state against new-signal-only entries")
     parser.add_argument("--test-max-hold", action="store_true", help="Compare time-based exits in three chronological periods")
@@ -172,6 +173,30 @@ def main():
     print("CANDLE QUALITY", quality)
     if quality["gaps"] or quality["irregular_intervals"]:
         print("DATA QUALITY WARNING: missing/irregular minutes; interpret performance cautiously")
+    if args.audit_fresh_losses:
+        n = len(bars)
+        boundaries = (0, n // 3, 2 * n // 3, n)
+        for period in range(3):
+            segment = bars[boundaries[period]:boundaries[period + 1]]
+            summary, trades = backtest(segment, take_profit=2.5, stop_loss=-3.0,
+                                       extra_cost_rate=0.0002, fresh_signal_only=True,
+                                       return_trades=True)
+            print("FRESH AUDIT PERIOD", period + 1, "SUMMARY", summary, flush=True)
+            for side in ("LONG", "SHORT"):
+                subset = [t for t in trades if t["side"] == side]
+                wins = sum(t["net"] > 0 for t in subset)
+                print("FRESH AUDIT PERIOD", period + 1, "SIDE", side,
+                      {"trades": len(subset), "wins": wins,
+                       "win_rate_pct": round(100 * wins / len(subset), 2) if subset else 0,
+                       "gross_usdt": round(sum(t["gross_usdt"] for t in subset), 2),
+                       "costs_usdt": round(sum(t["cost_usdt"] for t in subset), 2),
+                       "net_usdt": round(sum(t["net"] for t in subset), 2),
+                       "stop_count": sum(t["reason"] == "SL" for t in subset),
+                       "target_count": sum(t["reason"] == "TP" for t in subset),
+                       "avg_hold_minutes": round(sum(t["holding_minutes"] for t in subset) / len(subset), 2) if subset else 0},
+                      flush=True)
+        print("AUDIT ONLY: no strategy selection from historical holdout", flush=True)
+        return
     if args.test_fresh_ema_gap:
         n = len(bars)
         boundaries = (0, n // 3, 2 * n // 3, n)
