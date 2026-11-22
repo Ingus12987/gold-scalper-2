@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 from backtest_gold_profit_auto import backtest, direction, candle_quality
 from gold_profit_auto import START_BALANCE
 
@@ -11,7 +12,8 @@ class BacktestTests(unittest.TestCase):
             bars.append({"time": 1700000000000 + i * 60000,
                          "open": price, "high": price + 3,
                          "low": price - 0.1, "close": price + 0.2})
-        summary, trades = backtest(bars, return_trades=True, extra_cost_rate=0.0002)
+        with patch("backtest_gold_profit_auto.direction", return_value="LONG"):
+            summary, trades = backtest(bars, return_trades=True, extra_cost_rate=0.0002)
         self.assertGreater(len(trades), 0)
         for trade in trades:
             self.assertAlmostEqual(trade["gross_usdt"] - trade["cost_usdt"], trade["net"], places=3)
