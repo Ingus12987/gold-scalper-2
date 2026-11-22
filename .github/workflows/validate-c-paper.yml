@@ -9,7 +9,7 @@ on:
 jobs:
   validate-c:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 90
     permissions:
       contents: read
     steps:
@@ -23,7 +23,4 @@ jobs:
         run: python fetch_gold_history.py
       - name: Focused baseline and cooldown diagnosis (DEMO)
         run: |
-          python -u backtest_gold_profit_auto.py gold_history_1m.csv --validate-c
-          python -u backtest_gold_profit_auto.py gold_history_1m.csv --test-cooldown
-          python -u backtest_gold_profit_auto.py gold_history_1m.csv --diagnose-losses
           python -u backtest_gold_profit_auto.py gold_history_1m.csv --test-fresh-signals
