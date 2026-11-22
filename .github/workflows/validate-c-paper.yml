@@ -25,3 +25,4 @@ jobs:
         run: |
           python -u backtest_gold_profit_auto.py gold_history_1m.csv --validate-c
           python -u backtest_gold_profit_auto.py gold_history_1m.csv --test-cooldown
+          python -u backtest_gold_profit_auto.py gold_history_1m.csv --diagnose-losses
