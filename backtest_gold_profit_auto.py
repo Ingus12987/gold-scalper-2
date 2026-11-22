@@ -146,6 +146,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("csv_path", help="Historical 1m OHLC CSV")
     parser.add_argument("--compare", action="store_true", help="Compare paper TP/SL variants on identical candles")
+    parser.add_argument("--test-fresh-hold", action="store_true", help="Compare predeclared fresh-entry hold caps against no cap")
     parser.add_argument("--audit-fresh-losses", action="store_true", help="Fresh-signal losses by side, fees, stops and period")
     parser.add_argument("--test-fresh-ema-gap", action="store_true", help="Three-period fresh-entry EMA gap experiment, no forced time exit")
     parser.add_argument("--test-fresh-signals", action="store_true", help="Compare persistent state against new-signal-only entries")
@@ -173,6 +174,21 @@ def main():
     print("CANDLE QUALITY", quality)
     if quality["gaps"] or quality["irregular_intervals"]:
         print("DATA QUALITY WARNING: missing/irregular minutes; interpret performance cautiously")
+    if args.test_fresh_hold:
+        n = len(bars)
+        boundaries = (0, n // 3, 2 * n // 3, n)
+        for period in range(3):
+            segment = bars[boundaries[period]:boundaries[period + 1]]
+            for hold in (None, 120, 360):
+                summary, trades = backtest(segment, take_profit=2.5, stop_loss=-3.0,
+                    extra_cost_rate=0.0002, fresh_signal_only=True,
+                    max_hold_minutes=hold, return_trades=True)
+                print("FRESH HOLD", "PERIOD", period + 1, "MAX_MIN", hold,
+                      summary, "GROSS", round(sum(t["gross_usdt"] for t in trades), 2),
+                      "COSTS", round(sum(t["cost_usdt"] for t in trades), 2),
+                      "TIME_EXITS", sum(t["reason"] == "TIME" for t in trades), flush=True)
+        print("EXPERIMENT ONLY: compare train periods; final period is holdout, not optimization", flush=True)
+        return
     if args.audit_fresh_losses:
         n = len(bars)
         boundaries = (0, n // 3, 2 * n // 3, n)
