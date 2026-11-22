@@ -65,7 +65,7 @@ def backtest(bars, take_profit=TAKE_PROFIT_NET, stop_loss=STOP_LOSS_NET, return_
                 and loss_by_day.get(day, 0) < DAILY_LOSS_LIMIT):
             steps = max(0, int((balance - START_BALANCE) // GROWTH_STEP))
             notional = min(MAX_NOTIONAL, BASE_NOTIONAL * (1 + 0.1 * steps))
-            position = {"side": pending, "entry": o, "qty": notional / o}
+            position = {"side": pending, "entry": o, "qty": notional / o, "entry_time": ts}
         pending = None
         if position is not None:
             sign = 1 if position["side"] == "LONG" else -1
@@ -87,7 +87,13 @@ def backtest(bars, take_profit=TAKE_PROFIT_NET, stop_loss=STOP_LOSS_NET, return_
                     exit_price = o
                 net = pnl(exit_price)
                 balance += net
+                gross = (exit_price - entry) * qty * sign
+                execution_cost = (entry + exit_price) * qty * effective_fee
                 trades.append({"time": ts, "side": position["side"],
+                               "entry_time": position["entry_time"],
+                               "holding_minutes": round((ts - position["entry_time"]) / 60000, 2),
+                               "gross_usdt": round(gross, 4),
+                               "cost_usdt": round(execution_cost, 4),
                                "entry": entry, "exit": exit_price,
                                "net": round(net, 4),
                                "reason": "SL" if stop_hit else "TP"})
@@ -134,6 +140,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("csv_path", help="Historical 1m OHLC CSV")
     parser.add_argument("--compare", action="store_true", help="Compare paper TP/SL variants on identical candles")
+    parser.add_argument("--diagnose-losses", action="store_true", help="Audit gross PnL, costs, exit reasons and holding time across periods")
     parser.add_argument("--test-cooldown", action="store_true", help="Diagnose repeated-entry churn using predeclared cooldowns")
     parser.add_argument("--test-rsi", action="store_true", help="Compare predeclared RSI bands in chronological periods")
     parser.add_argument("--test-volatility", action="store_true", help="Three-period comparison of predeclared 14-bar range filters")
@@ -156,6 +163,19 @@ def main():
     print("CANDLE QUALITY", quality)
     if quality["gaps"] or quality["irregular_intervals"]:
         print("DATA QUALITY WARNING: missing/irregular minutes; interpret performance cautiously")
+    if args.diagnose_losses:
+        n = len(bars)
+        boundaries = (0, n // 3, 2 * n // 3, n)
+        for period in range(3):
+            segment = bars[boundaries[period]:boundaries[period + 1]]
+            summary, trades = backtest(segment, take_profit=2.5, stop_loss=-3.0, extra_cost_rate=0.0002, return_trades=True)
+            gross = round(sum(t["gross_usdt"] for t in trades), 2)
+            costs = round(sum(t["cost_usdt"] for t in trades), 2)
+            stops = [t for t in trades if t["reason"] == "SL"]
+            targets = [t for t in trades if t["reason"] == "TP"]
+            avg_hold = round(sum(t["holding_minutes"] for t in trades) / len(trades), 2) if trades else 0
+            print("LOSS AUDIT", "PERIOD", period + 1, {"trades": len(trades), "gross_usdt": gross, "costs_usdt": costs, "net_usdt": summary["net_usdt"], "stops": len(stops), "targets": len(targets), "stop_net_usdt": round(sum(t["net"] for t in stops), 2), "target_net_usdt": round(sum(t["net"] for t in targets), 2), "avg_hold_minutes": avg_hold, "open_position_at_end": summary["open_position_at_end"]})
+        return
     if args.test_cooldown:
         n = len(bars)
         boundaries = (0, n // 3, 2 * n // 3, n)
