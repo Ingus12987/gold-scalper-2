@@ -1,6 +1,9 @@
 name: H3 DEMO ER30 session research
 on:
   workflow_dispatch:
+  pull_request:
+    branches:
+      - main
   push:
     branches:
       - research/h3-er-session-demo-20261122
