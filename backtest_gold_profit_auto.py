@@ -175,7 +175,7 @@ def main():
         n = len(bars)
         boundaries = (0, n // 3, 2 * n // 3, n)
         for fresh in (False, True):
-            for hold in (None, 30, 120):
+            for hold in (30,):
                 for period in range(3):
                     segment = bars[boundaries[period]:boundaries[period + 1]]
                     summary, trades = backtest(segment, take_profit=2.5, stop_loss=-3.0, extra_cost_rate=0.0002, max_hold_minutes=hold, fresh_signal_only=fresh, return_trades=True)
