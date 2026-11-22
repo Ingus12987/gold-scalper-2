@@ -20,6 +20,14 @@ class BacktestTests(unittest.TestCase):
             self.assertGreaterEqual(trade["holding_minutes"], 0)
         self.assertAlmostEqual(sum(x["net"] for x in trades), summary["net_usdt"], places=2)
 
+    def test_fresh_signal_prevents_reentry_on_persistent_state(self):
+        bars = [{"time": 1700000000000 + i * 60000, "open": 100, "high": 100.1, "low": 99.9, "close": 100} for i in range(40)]
+        with patch("backtest_gold_profit_auto.direction", return_value="LONG"):
+            _, repeated = backtest(bars, return_trades=True, max_hold_minutes=3, take_profit=50, stop_loss=-50)
+            _, fresh = backtest(bars, return_trades=True, max_hold_minutes=3, take_profit=50, stop_loss=-50, fresh_signal_only=True)
+        self.assertGreater(len(repeated), 1)
+        self.assertEqual(len(fresh), 1)
+
     def test_max_hold_validation(self):
         with self.assertRaises(ValueError):
             backtest([], max_hold_minutes=0)
