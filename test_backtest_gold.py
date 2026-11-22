@@ -3,6 +3,21 @@ from backtest_gold_profit_auto import backtest, direction, candle_quality
 from gold_profit_auto import START_BALANCE
 
 class BacktestTests(unittest.TestCase):
+    def test_trade_cost_accounting_reconciles(self):
+        # Synthetic rising market produces entries and exits; verify every trade.
+        bars = []
+        for i in range(180):
+            price = 100 + i * 0.3
+            bars.append({"time": 1700000000000 + i * 60000,
+                         "open": price, "high": price + 3,
+                         "low": price - 0.1, "close": price + 0.2})
+        summary, trades = backtest(bars, return_trades=True, extra_cost_rate=0.0002)
+        self.assertGreater(len(trades), 0)
+        for trade in trades:
+            self.assertAlmostEqual(trade["gross_usdt"] - trade["cost_usdt"], trade["net"], places=3)
+            self.assertGreaterEqual(trade["holding_minutes"], 0)
+        self.assertAlmostEqual(sum(x["net"] for x in trades), summary["net_usdt"], places=2)
+
     def test_negative_cooldown_rejected(self):
         with self.assertRaises(ValueError):
             backtest([], cooldown_minutes=-1)
