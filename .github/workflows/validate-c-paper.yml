@@ -28,6 +28,8 @@ jobs:
         run: python fetch_gold_history.py
       - name: Repeat independent DEMO validation (never places orders)
         run: echo 'Scheduled research run; baseline remains unchanged'
+      - name: Diagnose fresh-signal losses by side (DEMO)
+        run: python -u backtest_gold_profit_auto.py gold_history_1m.csv --audit-fresh-losses
       - name: Fresh signal EMA strength comparison (DEMO)
         run: |
           python -u backtest_gold_profit_auto.py gold_history_1m.csv --test-fresh-ema-gap
