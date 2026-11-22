@@ -35,7 +35,9 @@ def direction(closes, min_ema_gap_pct=0.0, rsi_band=20):
         return "SHORT"
     return None
 
-def backtest(bars, take_profit=TAKE_PROFIT_NET, stop_loss=STOP_LOSS_NET, return_trades=False, min_ema_gap_pct=0.0, extra_cost_rate=0.0, allowed_side=None, min_range_pct=0.0, rsi_band=20, cooldown_minutes=0.5):
+def backtest(bars, take_profit=TAKE_PROFIT_NET, stop_loss=STOP_LOSS_NET, return_trades=False, min_ema_gap_pct=0.0, extra_cost_rate=0.0, allowed_side=None, min_range_pct=0.0, rsi_band=20, cooldown_minutes=0.5, max_hold_minutes=None):
+    if max_hold_minutes is not None and max_hold_minutes <= 0:
+        raise ValueError("max_hold_minutes must be positive or None")
     if cooldown_minutes < 0:
         raise ValueError("cooldown_minutes must be nonnegative")
     if not 0 < rsi_band <= 50:
@@ -78,10 +80,11 @@ def backtest(bars, take_profit=TAKE_PROFIT_NET, stop_loss=STOP_LOSS_NET, return_
             # For both TP and SL hit in one candle, prioritize SL.
             stop_hit = pnl(l if sign == 1 else h) <= stop_loss
             target_hit = pnl(h if sign == 1 else l) >= take_profit
-            if stop_hit or target_hit:
+            time_exit = (max_hold_minutes is not None and ts - position["entry_time"] >= max_hold_minutes * 60000)
+            if stop_hit or target_hit or time_exit:
                 threshold = stop_loss if stop_hit else take_profit
                 # Solve net PnL = threshold for price.
-                exit_price = (threshold + entry * qty * (sign + effective_fee)) / (qty * (sign - effective_fee))
+                exit_price = (threshold + entry * qty * (sign + effective_fee)) / (qty * (sign - effective_fee)) if (stop_hit or target_hit) else c
                 # Gap at open is filled at open, not the more favorable threshold.
                 if stop_hit and pnl(o) < threshold:
                     exit_price = o
@@ -96,7 +99,7 @@ def backtest(bars, take_profit=TAKE_PROFIT_NET, stop_loss=STOP_LOSS_NET, return_
                                "cost_usdt": round(execution_cost, 4),
                                "entry": entry, "exit": exit_price,
                                "net": round(net, 4),
-                               "reason": "SL" if stop_hit else "TP"})
+                               "reason": "SL" if stop_hit else ("TP" if target_hit else "TIME")})
                 if net < 0:
                     loss_by_day[day] = loss_by_day.get(day, 0) - net
                 position = None
@@ -140,6 +143,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("csv_path", help="Historical 1m OHLC CSV")
     parser.add_argument("--compare", action="store_true", help="Compare paper TP/SL variants on identical candles")
+    parser.add_argument("--test-max-hold", action="store_true", help="Compare time-based exits in three chronological periods")
     parser.add_argument("--diagnose-losses", action="store_true", help="Audit gross PnL, costs, exit reasons and holding time across periods")
     parser.add_argument("--test-cooldown", action="store_true", help="Diagnose repeated-entry churn using predeclared cooldowns")
     parser.add_argument("--test-rsi", action="store_true", help="Compare predeclared RSI bands in chronological periods")
@@ -163,6 +167,15 @@ def main():
     print("CANDLE QUALITY", quality)
     if quality["gaps"] or quality["irregular_intervals"]:
         print("DATA QUALITY WARNING: missing/irregular minutes; interpret performance cautiously")
+    if args.test_max_hold:
+        n = len(bars)
+        boundaries = (0, n // 3, 2 * n // 3, n)
+        for hold in (None, 30, 120, 360):
+            for period in range(3):
+                segment = bars[boundaries[period]:boundaries[period + 1]]
+                summary, trades = backtest(segment, take_profit=2.5, stop_loss=-3.0, extra_cost_rate=0.0002, max_hold_minutes=hold, return_trades=True)
+                print("MAX HOLD", hold, "PERIOD", period + 1, summary, "TIME_EXITS", sum(t["reason"] == "TIME" for t in trades), flush=True)
+        return
     if args.diagnose_losses:
         n = len(bars)
         boundaries = (0, n // 3, 2 * n // 3, n)
