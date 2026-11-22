@@ -61,6 +61,19 @@ def main():
                     "gross_usdt":round(sum(t["gross_usdt"] for t in trades),2),
                     "cost_usdt":round(sum(t["cost_usdt"] for t in trades),2),
                     "net_including_open_usdt":round(summary["equity_including_open_usdt"]-engine.START_BALANCE,2)}
+                # Diagnostic only: identify which side and exit type create losses.
+                # No parameter selection is made from these diagnostics.
+                for side in ("LONG", "SHORT"):
+                    side_trades = [t for t in trades if t["side"] == side]
+                    audit = {"segment": name, "strategy": result["strategy"],
+                        "extra_cost_per_side": cost, "side": side,
+                        "trades": len(side_trades),
+                        "gross_usdt": round(sum(t["gross_usdt"] for t in side_trades), 2),
+                        "cost_usdt": round(sum(t["cost_usdt"] for t in side_trades), 2),
+                        "net_closed_usdt": round(sum(t["net"] for t in side_trades), 2),
+                        "stops": sum(t["reason"] == "SL" for t in side_trades),
+                        "targets": sum(t["reason"] == "TP" for t in side_trades)}
+                    print("H3_SIDE_AUDIT", json.dumps(audit, sort_keys=True), flush=True)
                 print("H3_RESULT",json.dumps(result,sort_keys=True),flush=True)
     print("NO_HOLDOUT_TEST: last third deliberately excluded",flush=True)
 if __name__=="__main__":
