@@ -197,6 +197,16 @@ def main():
             summary, trades = backtest(segment, take_profit=2.5, stop_loss=-3.0,
                                        extra_cost_rate=0.0002, fresh_signal_only=True,
                                        return_trades=True)
+            # Diagnostic only: quantify whether signal edge covers execution costs.
+            gross_total = sum(t["gross_usdt"] for t in trades)
+            cost_total = sum(t["cost_usdt"] for t in trades)
+            print("FRESH COST EDGE PERIOD", period + 1,
+                  {"gross_usdt": round(gross_total, 2),
+                   "costs_usdt": round(cost_total, 2),
+                   "net_including_open_usdt": round(summary["net_usdt"] + summary["unrealized_pnl_usdt"], 2),
+                   "gross_per_trade_usdt": round(gross_total / len(trades), 4) if trades else 0,
+                   "cost_per_trade_usdt": round(cost_total / len(trades), 4) if trades else 0,
+                   "costs_exceed_gross": cost_total > gross_total}, flush=True)
             print("FRESH AUDIT PERIOD", period + 1, "SUMMARY", summary, flush=True)
             for side in ("LONG", "SHORT"):
                 subset = [t for t in trades if t["side"] == side]
