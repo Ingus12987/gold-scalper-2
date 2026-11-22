@@ -146,6 +146,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("csv_path", help="Historical 1m OHLC CSV")
     parser.add_argument("--compare", action="store_true", help="Compare paper TP/SL variants on identical candles")
+    parser.add_argument("--test-fresh-ema-gap", action="store_true", help="Three-period fresh-entry EMA gap experiment, no forced time exit")
     parser.add_argument("--test-fresh-signals", action="store_true", help="Compare persistent state against new-signal-only entries")
     parser.add_argument("--test-max-hold", action="store_true", help="Compare time-based exits in three chronological periods")
     parser.add_argument("--diagnose-losses", action="store_true", help="Audit gross PnL, costs, exit reasons and holding time across periods")
@@ -171,6 +172,18 @@ def main():
     print("CANDLE QUALITY", quality)
     if quality["gaps"] or quality["irregular_intervals"]:
         print("DATA QUALITY WARNING: missing/irregular minutes; interpret performance cautiously")
+    if args.test_fresh_ema_gap:
+        n = len(bars)
+        boundaries = (0, n // 3, 2 * n // 3, n)
+        for gap in (0.0, 0.03, 0.08):
+            for period in range(3):
+                segment = bars[boundaries[period]:boundaries[period + 1]]
+                summary, trades = backtest(segment, take_profit=2.5, stop_loss=-3.0, extra_cost_rate=0.0002, fresh_signal_only=True, min_ema_gap_pct=gap, return_trades=True)
+                gross = round(sum(t["gross_usdt"] for t in trades), 2)
+                costs = round(sum(t["cost_usdt"] for t in trades), 2)
+                print("FRESH EMA GAP", gap, "PERIOD", period + 1, summary, "GROSS", gross, "COSTS", costs, flush=True)
+        print("EXPERIMENT ONLY: no changes to running paper bot; evaluate all three periods", flush=True)
+        return
     if args.test_fresh_signals:
         n = len(bars)
         boundaries = (0, n // 3, 2 * n // 3, n)
