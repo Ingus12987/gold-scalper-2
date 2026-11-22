@@ -36,6 +36,35 @@ def run(bars,cost,filter_long):
 def short_ids(trades):
     return [(t["entry_time"],t["time"],t["entry"],t["exit"],t["reason"],t["net"]) for t in trades if t["side"]=="SHORT"]
 
+def counterfactual_baseline_ledger(bars, baseline_trades):
+    """Attribution only: retain baseline SHORT fills exactly, remove disallowed LONG fills.
+    This is NOT a feasible execution backtest: freed occupancy is deliberately not reused.
+    Closed PnL only; never confuse this with equity including an open position.
+    """
+    allowed = long_gate(bars)
+    time_to_gate = {int(b["time"]): flag for b, flag in zip(bars, allowed)}
+    retained = [t for t in baseline_trades
+                if t["side"] == "SHORT" or time_to_gate.get(int(t["entry_time"]), False)]
+    assert short_ids(retained) == short_ids(baseline_trades), "SHORT ledger changed"
+    removed = [t for t in baseline_trades
+               if t["side"] == "LONG" and not time_to_gate.get(int(t["entry_time"]), False)]
+    def metrics(trades):
+        net = sum(float(t["net"]) for t in trades)
+        cumulative = peak = max_dd = 0.0
+        for t in trades:
+            cumulative += float(t["net"])
+            peak = max(peak, cumulative)
+            max_dd = max(max_dd, peak - cumulative)
+        return {"closed_net": round(net, 2), "closed_trade_max_dd": round(max_dd, 2)}
+    return {"baseline": metrics(baseline_trades),
+            "retained": metrics(retained),
+            "removed_long": metrics(removed),
+            "removed_long_count": len(removed),
+            "baseline_long_count": sum(t["side"] == "LONG" for t in baseline_trades),
+            "short_count": len(short_ids(baseline_trades)),
+            "short_ledger_identical": True,
+            "interpretation": "non-executable baseline-fill attribution, closed trades only"}
+
 def main(path):
     with open(path,newline="") as f: bars=list(csv.DictReader(f))
     q=engine.candle_quality(bars)
@@ -48,6 +77,8 @@ def main(path):
             base,bt=run(segment,cost,False)
             filt,ft=run(segment,cost,True)
             same=short_ids(bt)==short_ids(ft)
+            cf=counterfactual_baseline_ledger(segment,bt)
+            print("LONG_BASELINE_COUNTERFACTUAL",json.dumps({"segment":label,"cost_per_side":cost,**cf},sort_keys=True),flush=True)
             for name,s,t in (("baseline",base,bt),("long_15m_ema50",filt,ft)):
                 print("LONG_TRAIN_RESULT",json.dumps({"segment":label,"cost_per_side":cost,
                     "strategy":name,"long_trades":sum(x["side"]=="LONG" for x in t),
