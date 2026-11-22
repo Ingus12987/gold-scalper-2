@@ -1,0 +1,20 @@
+name: H3 DEMO ER30 session research
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - research/h3-er-session-demo-20261122
+jobs:
+  h3-demo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 85
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements.txt
+      - name: Download public XAUT candles (no orders)
+        run: python fetch_gold_history.py
+      - name: Train and validation only, with cost stress
+        run: python -u research_h3_er_session.py gold_history_1m.csv
