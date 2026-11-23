@@ -1,7 +1,7 @@
 """Isolated LONG-only 15m completed EMA50 trend hypothesis; TRAIN only.
 No orders, secrets, validation/old holdout or parameter tuning.
 """
-import csv, json, sys
+import csv, hashlib, json, sys
 import pandas as pd
 import backtest_gold_profit_auto as engine
 
@@ -67,6 +67,12 @@ def counterfactual_baseline_ledger(bars, baseline_trades):
 
 def main(path):
     with open(path,newline="") as f: bars=list(csv.DictReader(f))
+    with open(path,"rb") as raw_file:
+        source_sha256=hashlib.sha256(raw_file.read()).hexdigest()
+    print("LONG_INPUT_AUDIT",json.dumps({"sha256":source_sha256,"candles":len(bars),
+        "first_time":bars[0]["time"] if bars else None,
+        "last_time":bars[-1]["time"] if bars else None,
+        "note":"fresh public fetch; comparison across runs requires identical sha256"},sort_keys=True),flush=True)
     q=engine.candle_quality(bars)
     if q["gaps"] or q["irregular_intervals"]: raise ValueError(q)
     train=bars[:len(bars)//3]
