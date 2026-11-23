@@ -67,13 +67,32 @@ def counterfactual_baseline_ledger(bars, baseline_trades):
             "short_ledger_identical": True,
             "interpretation": "non-executable baseline-fill attribution, closed trades only"}
 
-def baseline_train_diagnostics(trades, segment, cost):
+def baseline_train_diagnostics(trades, segment, cost, bars):
     """Descriptive TRAIN-only closed fills; no strategy selection or look-ahead."""
     groups = defaultdict(list)
+    # Past-only volatility/regime tags; descriptive TRAIN diagnostics, not a gate.
+    close = pd.Series([float(b["close"]) for b in bars])
+    high = pd.Series([float(b["high"]) for b in bars])
+    low = pd.Series([float(b["low"]) for b in bars])
+    tr = pd.concat([high-low, (high-close.shift()).abs(),
+                    (low-close.shift()).abs()], axis=1).max(axis=1)
+    atr = tr.rolling(14, min_periods=14).mean().shift(1)
+    ema = close.ewm(span=50, adjust=False, min_periods=50).mean().shift(1)
+    time_idx = {int(b["time"]): i for i, b in enumerate(bars)}
     for t in trades:
         hour = datetime.fromtimestamp(int(t["entry_time"])/1000, timezone.utc).hour
+        idx = time_idx.get(int(t["entry_time"]))
+        regime = "unknown"
+        volatility = "unknown"
+        if idx is not None and pd.notna(ema.iloc[idx]):
+            regime = "above_ema50" if float(close.iloc[idx-1]) >= float(ema.iloc[idx]) else "below_ema50" if idx > 0 else "unknown"
+        if idx is not None and pd.notna(atr.iloc[idx]) and idx > 0:
+            # ATR as percentage of prior close; fixed ex-ante 0.1% boundary.
+            volatility = "atr14_ge_0.1pct" if float(atr.iloc[idx])/float(close.iloc[idx-1]) >= 0.001 else "atr14_lt_0.1pct"
         for dimension, value in (("side", t["side"]), ("utc_entry_hour", f"{hour:02d}"),
-                                 ("exit_reason", str(t["reason"]))):
+                                 ("exit_reason", str(t["reason"])),
+                                 ("past_only_ema50_regime", regime),
+                                 ("past_only_atr14_volatility", volatility)):
             groups[(dimension, value, t["side"])].append(float(t["net"]))
     for (dimension, value, side), pnl in sorted(groups.items()):
         print("LONG_TRAIN_DIAGNOSTIC", json.dumps({
@@ -100,7 +119,7 @@ def main(path):
     for label,segment in (("train_a",train[:mid]),("train_b",train[mid+100:])):
         for cost in (0.0002,0.0005):
             base,bt=run(segment,cost,False)
-            baseline_train_diagnostics(bt,label,cost)
+            baseline_train_diagnostics(bt,label,cost,segment)
             filt,ft=run(segment,cost,True)
             same=short_ids(bt)==short_ids(ft)
             cf=counterfactual_baseline_ledger(segment,bt)
