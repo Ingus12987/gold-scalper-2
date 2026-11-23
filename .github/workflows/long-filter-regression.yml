@@ -1,0 +1,16 @@
+name: LONG filter regression (research only)
+on:
+  push:
+    branches:
+      - experiment/long-entry-filter-train
+  workflow_dispatch:
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install pandas requests
+      - run: python -m unittest -v test_long_filter_regression
