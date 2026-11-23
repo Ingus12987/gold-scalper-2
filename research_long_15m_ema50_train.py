@@ -2,6 +2,8 @@
 No orders, secrets, validation/old holdout or parameter tuning.
 """
 import csv, hashlib, json, sys
+from collections import defaultdict
+from datetime import datetime, timezone
 import pandas as pd
 import backtest_gold_profit_auto as engine
 
@@ -65,6 +67,23 @@ def counterfactual_baseline_ledger(bars, baseline_trades):
             "short_ledger_identical": True,
             "interpretation": "non-executable baseline-fill attribution, closed trades only"}
 
+def baseline_train_diagnostics(trades, segment, cost):
+    """Descriptive TRAIN-only closed fills; no strategy selection or look-ahead."""
+    groups = defaultdict(list)
+    for t in trades:
+        hour = datetime.fromtimestamp(int(t["entry_time"])/1000, timezone.utc).hour
+        for dimension, value in (("side", t["side"]), ("utc_entry_hour", f"{hour:02d}"),
+                                 ("exit_reason", str(t["reason"]))):
+            groups[(dimension, value, t["side"])].append(float(t["net"]))
+    for (dimension, value, side), pnl in sorted(groups.items()):
+        print("LONG_TRAIN_DIAGNOSTIC", json.dumps({
+            "segment": segment, "cost_per_side": cost, "dimension": dimension,
+            "value": value, "side": side, "trades": len(pnl),
+            "closed_net_usdt": round(sum(pnl), 2),
+            "losing_trades": sum(x < 0 for x in pnl),
+            "note": "TRAIN closed fills only; no MAE/MFE or open equity in this table"
+        }, sort_keys=True), flush=True)
+
 def main(path):
     with open(path,newline="") as f: bars=list(csv.DictReader(f))
     with open(path,"rb") as raw_file:
@@ -81,6 +100,7 @@ def main(path):
     for label,segment in (("train_a",train[:mid]),("train_b",train[mid+100:])):
         for cost in (0.0002,0.0005):
             base,bt=run(segment,cost,False)
+            baseline_train_diagnostics(bt,label,cost)
             filt,ft=run(segment,cost,True)
             same=short_ids(bt)==short_ids(ft)
             cf=counterfactual_baseline_ledger(segment,bt)
