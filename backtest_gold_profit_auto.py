@@ -35,7 +35,7 @@ def direction(closes, min_ema_gap_pct=0.0, rsi_band=20):
         return "SHORT"
     return None
 
-def backtest(bars, take_profit=TAKE_PROFIT_NET, stop_loss=STOP_LOSS_NET, return_trades=False, min_ema_gap_pct=0.0, extra_cost_rate=0.0, allowed_side=None, min_range_pct=0.0, rsi_band=20, cooldown_minutes=0.5, max_hold_minutes=None, fresh_signal_only=False):
+def backtest(bars, take_profit=TAKE_PROFIT_NET, stop_loss=STOP_LOSS_NET, return_trades=False, min_ema_gap_pct=0.0, extra_cost_rate=0.0, allowed_side=None, min_range_pct=0.0, rsi_band=20, cooldown_minutes=0.5, max_hold_minutes=None, fresh_signal_only=False, long_filter=None):
     if max_hold_minutes is not None and max_hold_minutes <= 0:
         raise ValueError("max_hold_minutes must be positive or None")
     if cooldown_minutes < 0:
@@ -52,6 +52,7 @@ def backtest(bars, take_profit=TAKE_PROFIT_NET, stop_loss=STOP_LOSS_NET, return_
     position = None
     trades = []
     pending = None
+    pending_long_ok = True
     previous_signal = None
     last_exit_time = -10**15
     loss_by_day = {}
@@ -64,6 +65,8 @@ def backtest(bars, take_profit=TAKE_PROFIT_NET, stop_loss=STOP_LOSS_NET, return_
         if min(o, h, l, c) <= 0 or l > min(o, c) or h < max(o, c):
             raise ValueError(f"Invalid OHLC bar at index {i}")
         # Pending signal from the PREVIOUS closed candle.
+        if position is None and pending == 'LONG' and not pending_long_ok:
+            pending = None
         if (position is None and pending and (allowed_side is None or pending == allowed_side) and ts - last_exit_time >= cooldown_minutes * 60000
                 and loss_by_day.get(day, 0) < DAILY_LOSS_LIMIT):
             steps = max(0, int((balance - START_BALANCE) // GROWTH_STEP))
@@ -114,6 +117,7 @@ def backtest(bars, take_profit=TAKE_PROFIT_NET, stop_loss=STOP_LOSS_NET, return_
         eligible_signal = signal if range_pct >= min_range_pct else None
         if position is None and (not fresh_signal_only or (eligible_signal is not None and eligible_signal != previous_signal)):
             pending = eligible_signal
+            pending_long_ok = (eligible_signal != 'LONG' or long_filter is None or bool(long_filter(bars, i)))
         previous_signal = eligible_signal
     unrealized = 0.0
     if position is not None:
