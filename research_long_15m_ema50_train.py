@@ -7,17 +7,17 @@ from datetime import datetime, timezone
 import pandas as pd
 import backtest_gold_profit_auto as engine
 
-def long_gate(bars):
+def long_gate(bars, span=50):
     # Current 15m bucket is incomplete; only use the previous completed bucket.
     frame = pd.DataFrame({"bucket":[int(b["time"])//900000 for b in bars],
                           "close":[float(b["close"]) for b in bars]})
     completed = frame.groupby("bucket",sort=True)["close"].last()
-    ema = completed.ewm(span=50,adjust=False,min_periods=50).mean()
+    ema = completed.ewm(span=span,adjust=False,min_periods=span).mean()
     allowed = dict(zip(completed.index,completed >= ema))
     return [bool(allowed.get(int(b["time"])//900000-1,False)) for b in bars]
 
-def run(bars,cost,filter_long,allowed_side=None):
-    allowed=long_gate(bars) if filter_long else None
+def run(bars,cost,filter_long,allowed_side=None,span=50):
+    allowed=long_gate(bars, span) if filter_long else None
     original=engine.direction
     index=-1
     def direction(closes,**kw):
@@ -141,6 +141,15 @@ def isolated_sleeves(segment, label, cost):
             # A rejected LONG becomes None, which must not affect SHORT
             # transitions or executions in a dedicated SHORT account.
             assert bt == ct and baseline == candidate, "Isolated SHORT regression failed"
+        if side == "LONG":
+            for span in (40, 60):
+                neighbor, nt = run(segment, cost, True, allowed_side=side, span=span)
+                print("LONG_EMA_NEIGHBOR", json.dumps({
+                    "segment": label, "cost_per_side": cost, "span": span,
+                    "baseline": baseline, "ema50": candidate, "neighbor": neighbor,
+                    "neighbor_cost": round(sum(t["cost_usdt"] for t in nt), 4),
+                    "capital_model": "isolated LONG only; TRAIN sensitivity, not holdout"
+                }, sort_keys=True), flush=True)
         print("ISOLATED_SLEEVE_RESULT", json.dumps({
             "segment": label, "cost_per_side": cost, "side": side,
             "baseline": baseline, "candidate": candidate,
