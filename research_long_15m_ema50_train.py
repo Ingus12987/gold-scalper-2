@@ -16,7 +16,7 @@ def long_gate(bars):
     allowed = dict(zip(completed.index,completed >= ema))
     return [bool(allowed.get(int(b["time"])//900000-1,False)) for b in bars]
 
-def run(bars,cost,filter_long):
+def run(bars,cost,filter_long,allowed_side=None):
     allowed=long_gate(bars) if filter_long else None
     original=engine.direction
     index=-1
@@ -30,7 +30,7 @@ def run(bars,cost,filter_long):
     engine.direction=direction
     try:
         summary,trades=engine.backtest(bars,take_profit=2.5,stop_loss=-3.0,
-              extra_cost_rate=cost,fresh_signal_only=True,return_trades=True)
+              extra_cost_rate=cost,fresh_signal_only=True,return_trades=True,allowed_side=allowed_side)
         return summary,trades
     finally:
         engine.direction=original
@@ -126,6 +126,30 @@ def baseline_train_diagnostics(trades, segment, cost, bars):
             "note": "TRAIN closed fills only; no MAE/MFE or open equity in this table"
         }, sort_keys=True), flush=True)
 
+def isolated_sleeves(segment, label, cost):
+    """Separate virtual accounts, not a deployable shared-capital portfolio.
+
+    Compare LONG-only baseline vs gated LONG-only; independently rerun
+    SHORT-only with the gate enabled to verify exact fill invariance.
+    Each sleeve has its own original starting capital and risk limits.
+    Never add these PnLs as if they came from one original account.
+    """
+    for side in ("SHORT", "LONG"):
+        baseline, bt = run(segment, cost, False, allowed_side=side)
+        candidate, ct = run(segment, cost, True, allowed_side=side)
+        if side == "SHORT":
+            # A rejected LONG becomes None, which must not affect SHORT
+            # transitions or executions in a dedicated SHORT account.
+            assert bt == ct and baseline == candidate, "Isolated SHORT regression failed"
+        print("ISOLATED_SLEEVE_RESULT", json.dumps({
+            "segment": label, "cost_per_side": cost, "side": side,
+            "baseline": baseline, "candidate": candidate,
+            "baseline_cost": round(sum(t["cost_usdt"] for t in bt), 4),
+            "candidate_cost": round(sum(t["cost_usdt"] for t in ct), 4),
+            "identical_full_ledger": bt == ct,
+            "capital_model": "separate full-size virtual accounts; no portfolio aggregation"
+        }, sort_keys=True), flush=True)
+
 def main(path):
     with open(path,newline="") as f: bars=list(csv.DictReader(f))
     with open(path,"rb") as raw_file:
@@ -159,5 +183,6 @@ def main(path):
                 "filtered_short_count":len(short_ids(ft))}),flush=True)
             if not same:
                 print("SHORT_REGRESSION_BLOCK: shared position occupancy changes SHORT executions; candidate cannot be promoted",flush=True)
+            isolated_sleeves(segment, label, cost)
     print("NO_VALIDATION_OR_HOLDOUT: TRAIN-only diagnostic, no promotion",flush=True)
 if __name__=="__main__": main(sys.argv[1])
