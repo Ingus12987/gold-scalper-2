@@ -7,6 +7,9 @@ on:
   push:
     branches:
       - research/h3-er-session-demo-20261122
+permissions:
+  contents: read
+  actions: read
 jobs:
   h3-demo:
     runs-on: ubuntu-latest
@@ -17,8 +20,14 @@ jobs:
         with:
           python-version: '3.11'
       - run: python -m pip install -r requirements.txt
-      - name: Download public XAUT candles (no orders)
-        run: python fetch_gold_history.py
+      - name: Restore pinned public XAUT candles (no orders)
+        uses: actions/download-artifact@v4
+        with:
+          name: xaut-1m-input-45264961940
+          run-id: 45264961940
+          github-token: ${{ github.token }}
+      - name: Verify exact raw CSV SHA256 before research
+        run: echo '9ede7188b356b639403db3af3cbcbac578dda15fd9ed0ab4484517dd295146a5  gold_history_1m.csv' | sha256sum --check
       - name: Archive exact input for reproducible follow-up
         uses: actions/upload-artifact@v4
         with:
