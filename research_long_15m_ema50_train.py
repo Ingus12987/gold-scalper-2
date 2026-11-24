@@ -79,7 +79,30 @@ def baseline_train_diagnostics(trades, segment, cost, bars):
     atr = tr.rolling(14, min_periods=14).mean().shift(1)
     ema = close.ewm(span=50, adjust=False, min_periods=50).mean().shift(1)
     time_idx = {int(b["time"]): i for i, b in enumerate(bars)}
+    # Conservative excursion bounds: exclude exit candle extremes because
+    # their ordering relative to the actual fill is unknown. Include fill price.
     for t in trades:
+        start = time_idx.get(int(t["entry_time"]))
+        end = time_idx.get(int(t["time"]))
+        if start is None or end is None or end < start:
+            raise ValueError("Trade timestamps not aligned with candles")
+        entry, exit_price = float(t["entry"]), float(t["exit"])
+        highs = [entry, exit_price]
+        lows = [entry, exit_price]
+        if end > start:
+            highs.append(float(high.iloc[start:end].max()))
+            lows.append(float(low.iloc[start:end].min()))
+        sign = 1 if t["side"] == "LONG" else -1
+        favorable = max(sign*(p-entry)/entry*100 for p in (max(highs), min(lows)))
+        adverse = min(sign*(p-entry)/entry*100 for p in (max(highs), min(lows)))
+        print("TRAIN_EXCURSION", json.dumps({
+            "segment": segment, "cost_per_side": cost, "side": t["side"],
+            "entry_time": t["entry_time"], "exit_time": t["time"],
+            "reason": t["reason"], "net_usdt": t["net"],
+            "mfe_pct_lower_bound": round(favorable, 6),
+            "mae_pct_magnitude_lower_bound": round(-adverse, 6),
+            "exit_bar_extremes_excluded": True
+        }, sort_keys=True), flush=True)
         hour = datetime.fromtimestamp(int(t["entry_time"])/1000, timezone.utc).hour
         idx = time_idx.get(int(t["entry_time"]))
         regime = "unknown"
