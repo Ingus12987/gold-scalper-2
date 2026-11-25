@@ -1,0 +1,36 @@
+name: DEMO pinned walk-forward audit
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [demo-walkforward-20261125]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: xaut-1m-input-45264961940
+          run-id: 45264961940
+          github-token: ${{ github.token }}
+      - name: Verify pinned public input
+        run: echo '9ede7188b356b639403db3af3cbcbac578dda15fd9ed0ab4484517dd295146a5  gold_history_1m.csv' | sha256sum --check
+      - name: Run TRAIN blocks only (excluded third is contaminated)
+        run: |
+          set -o pipefail
+          python -u demo_walkforward.py gold_history_1m.csv | tee demo-walkforward.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: demo-walkforward-results
+          path: demo-walkforward.json
+          if-no-files-found: error
